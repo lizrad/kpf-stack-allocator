@@ -1,6 +1,6 @@
 /**
 * Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
-* Group members: NAME1 (gsXXXX), NAME2 (gsXXXX), NAME3 (gsXXXX)
+* Group members: Amon Shokhin Ahmed (gs20m014), Karl Bittner (gs20m013), David Panagiotopulos (gs20m019)
 **/
 
 #include "stdio.h"
@@ -54,6 +54,7 @@ namespace Tests
 
 // Assignment functionality tests are going to be included here 
 
+// If set to 1, Free() and FreeBack() should assert if the memory canaries are corrupted
 #define WITH_DEBUG_CANARIES 0
 
 /**
@@ -68,12 +69,18 @@ class DoubleEndedStackAllocator
 public:
 	DoubleEndedStackAllocator(size_t max_size) {}
 
+	// TODO: Add Copy and Move Constructor / Assignment Operator (delete them?)
+
+	// Alignment must be a power of two.
+	// Returns a nullptr if there is not enough memory left.
 	void* Allocate(size_t size, size_t alignment) { return nullptr; }
 	void* AllocateBack(size_t size, size_t alignment) { return nullptr; }
 
+	// LIFO is assumed.
 	void Free(void* memory) {}
 	void FreeBack(void* memory) {}
 
+	// Clear the internal state so that the whole allocator range is available again.
 	void Reset(void) {}
 
 	~DoubleEndedStackAllocator(void) {}
