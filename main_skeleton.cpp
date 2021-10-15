@@ -4,6 +4,7 @@
  **/
 
 #include "stdio.h"
+#include <stdint.h> // for uintptr_t
 
 namespace Tests
 {
@@ -107,6 +108,17 @@ class DoubleEndedStackAllocator
     }
 
   private:
+    uintptr_t current_front_address;
+    uintptr_t current_back_address;
+
+    uintptr_t AlignUp(uintptr_t address, size_t alignment)
+    {
+        return (address & ~(alignment - 1)) + alignment;
+    }
+    uintptr_t AlignDown(uintptr_t address, size_t alignment)
+    {
+        return (address & ~(alignment - 1)) - alignment;
+    }
 };
 
 int main()
