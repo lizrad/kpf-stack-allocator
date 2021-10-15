@@ -4,7 +4,8 @@
  **/
 
 #include "stdio.h"
-#include <stdint.h> // for uintptr_t
+#include <cstdint>
+#include <malloc.h>
 
 namespace Tests
 {
@@ -69,9 +70,20 @@ class DoubleEndedStackAllocator
   public:
     DoubleEndedStackAllocator(size_t max_size)
     {
+        void *begin = malloc(max_size);
+
+        // TODO: Error handling
+
+        // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
+        allocation_begin = reinterpret_cast<uintptr_t>(begin);
+        allocation_end = reinterpret_cast<uintptr_t>(begin) + max_size;
+
+        // Initialize the current addresses to the edges of the allocated space
+        Reset();
     }
     ~DoubleEndedStackAllocator(void)
     {
+        free(reinterpret_cast<void *>(allocation_begin));
     }
 
     // Copy and Move Constructors / Assignment Operators are explicitly deleted.
@@ -87,27 +99,45 @@ class DoubleEndedStackAllocator
     // Returns a nullptr if there is not enough memory left.
     void *Allocate(size_t size, size_t alignment)
     {
-        return nullptr;
+        uintptr_t start = AlignUp(current_front_address, alignment);
+        current_front_address += size;
+
+        // TODO: Add more than size and include metadata
+
+        return reinterpret_cast<void *>(current_front_address);
     }
     void *AllocateBack(size_t size, size_t alignment)
     {
-        return nullptr;
+        uintptr_t start = AlignDown(current_back_address, alignment);
+        current_back_address -= size;
+
+        // TODO: Subtract more than size and include metadata
+
+        return reinterpret_cast<void *>(current_back_address);
     }
 
     // LIFO is assumed.
     void Free(void *memory)
     {
+        // TODO: Read metadata and move the pointer accordingly
     }
     void FreeBack(void *memory)
     {
+        // TODO: Read metadata and move the pointer accordingly
     }
 
     // Clear the internal state so that the whole allocator range is available again.
     void Reset(void)
     {
+        // Reset the pointers to the outer edges of the allocation
+        current_front_address = allocation_begin;
+        current_back_address = allocation_end;
     }
 
   private:
+    uintptr_t allocation_begin;
+    uintptr_t allocation_end;
+
     uintptr_t current_front_address;
     uintptr_t current_back_address;
 
