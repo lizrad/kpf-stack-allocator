@@ -6,6 +6,8 @@
 #include "stdio.h"
 #include <cstdint>
 #include <malloc.h>
+#include <new>
+#include <iostream>
 
 namespace Tests
 {
@@ -56,7 +58,25 @@ namespace Tests
 // Assignment functionality tests are going to be included here
 
 // If set to 1, Free() and FreeBack() should assert if the memory canaries are corrupted
-#define WITH_DEBUG_CANARIES 0
+#define WITH_DEBUG_CANARIES 1
+
+#if WITH_DEBUG_CANARIES
+static const uint16_t CANARY = 0x0DD0;
+static const size_t CANARY_SIZE = sizeof(CANARY);
+#else
+static const uintptr_t CANARY_SIZE = 0;
+#endif
+
+
+struct Metadata
+{
+    Metadata(uintptr_t prevMetadataAddress, size_t contentSize)
+        : PrevMetadataAddress(prevMetadataAddress), ContentSize(contentSize)
+    {
+    }
+    uintptr_t PrevMetadataAddress;
+    size_t ContentSize;
+};
 
 /**
  * You work on your DoubleEndedStackAllocator. Stick to the provided interface, this is
@@ -65,6 +85,8 @@ namespace Tests
  * allocator needs to work after it was created and its constructor was called. You can
  * add additional public functions but those should only be used for your own testing.
  **/
+
+
 class DoubleEndedStackAllocator
 {
   public:
@@ -95,17 +117,57 @@ class DoubleEndedStackAllocator
     DoubleEndedStackAllocator &operator=(const DoubleEndedStackAllocator &other) = delete;  // Copy Assignment Operator
     DoubleEndedStackAllocator &operator=(const DoubleEndedStackAllocator &&other) = delete; // Move Assignment Operator
 
+
+
+    /**
+    * Memory layout of content is:
+    * ...[previous Canary][   ][Metadata][Content][Canary][   ][next Metadata]....
+    * Pointer points to border of Metadata and Content.
+    * [Content] Block will be on aligned adress.
+    * This means there might me unused space before Metadata.
+    **/
+
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     void *Allocate(size_t size, size_t alignment)
     {
-        uintptr_t start = AlignUp(current_front_address, alignment);
-        current_front_address += size;
+            
+        // TODO: Check params for validity: power of two, enough size left, overlap etc.
 
-        // TODO: Add more than size and include metadata
+        uintptr_t actual_front = current_front_address;
+        
+        // special case - first allocation: 
+        // current_front ist actually already free, 
+        // so we don't have to offset by content size and canary
+        if (current_front_address != allocation_begin)
+        {
+            // Offsetting front point that points at start of content by size of content and canary size to actually get free space
+            Metadata* metadata = ReadMetadata(current_front_address);
+            actual_front += metadata->ContentSize;
+#if WITH_DEBUG_CANARIES
+            actual_front += sizeof(CANARY);
+#endif // WITH_DEBUG_CANARIES
+        }
 
-        return reinterpret_cast<void *>(current_front_address);
+        // making sure there is enough space to write metadata
+        uintptr_t front_with_space_for_metadata = actual_front + sizeof(Metadata);
+
+        // align front 
+        uintptr_t new_front = AlignUp(front_with_space_for_metadata, alignment);
+
+        // write metadata backwards from front
+        WriteMeta(new_front, current_front_address, size);
+#if WITH_DEBUG_CANARIES
+
+        // write canaries at end of content
+        WriteCanary(new_front, size);
+#endif 
+        current_front_address = new_front;
+       
+        return reinterpret_cast<void *>(new_front);
     }
+
+
     void *AllocateBack(size_t size, size_t alignment)
     {
         uintptr_t start = AlignDown(current_back_address, alignment);
@@ -133,6 +195,10 @@ class DoubleEndedStackAllocator
         current_front_address = allocation_begin;
         current_back_address = allocation_end;
     }
+    static Metadata *ReadMetadata(uintptr_t address)
+    {
+        return reinterpret_cast<Metadata *>(address - sizeof(Metadata));
+    }
 
   private:
     uintptr_t allocation_begin;
@@ -140,6 +206,21 @@ class DoubleEndedStackAllocator
 
     uintptr_t current_front_address;
     uintptr_t current_back_address;
+
+    void WriteMeta(uintptr_t address, uintptr_t prevMetadataAddress, size_t contentSize)
+    {
+        std::cout << contentSize << std::endl;
+        uintptr_t metadataAddress = address - sizeof(Metadata);
+        *reinterpret_cast<Metadata *>(metadataAddress) = Metadata(prevMetadataAddress, contentSize);
+    }
+
+    #if WITH_DEBUG_CANARIES
+    static void WriteCanary(uintptr_t address, size_t contentSize)
+    {
+        uintptr_t canaryAddress = address + contentSize;
+        *reinterpret_cast<uint16_t *>(canaryAddress) = uint16_t(CANARY);
+    }
+    #endif
 
     uintptr_t AlignUp(uintptr_t address, size_t alignment)
     {
@@ -151,16 +232,25 @@ class DoubleEndedStackAllocator
     }
 };
 
+#define RUN_TESTS 0
 int main()
 {
     // You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a
     // specific max_size
+    #if RUN_TESTS
     {
         // You can remove this, just showcasing how the test functions can be used
         DoubleEndedStackAllocator allocator(1024u);
-        Tests::Test_Case_Success("Allocate() returns nullptr",
-                                 [&allocator]() { return allocator.Allocate(32, 1) == nullptr; }());
+        Tests::Test_Case_Success("Allocate() does not return nullptr",
+                                 [&allocator]() { return allocator.Allocate(32, 1) != nullptr; }());
+
     }
+    #endif //RUN_TEST
+
+    DoubleEndedStackAllocator allocator(1024u);
+    auto a = allocator.Allocate(32, 4);
+    auto b = allocator.Allocate(63, 8);
+    auto c = allocator.Allocate(121, 16);
 
     // You can do whatever you want here in the main function
 
