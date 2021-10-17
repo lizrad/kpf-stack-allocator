@@ -131,19 +131,19 @@ class DoubleEndedStackAllocator
     {
         assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
 
-        uintptr_t offset_address = current_front_free_address;
+        uintptr_t offset_address = next_free_address_front;
         // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
 
         // Allocate using correct offeset address (provide prev metadata address)
-        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address, current_front_address);
+        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address, last_data_begin_address_front);
 
         // Update internal address pointers
-        current_front_address = allocation_address;
-        current_front_free_address = allocation_address + size;
+        last_data_begin_address_front = allocation_address;
+        next_free_address_front = allocation_address + size;
 #if WITH_DEBUG_CANARIES
         // Add canary size to get correct free address
-        current_front_free_address += sizeof(CANARY);
+        next_free_address_front += sizeof(CANARY);
 #endif
 
         return reinterpret_cast<void *>(allocation_address);
@@ -156,7 +156,7 @@ class DoubleEndedStackAllocator
     {
         assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
 
-        uintptr_t offset_address = current_back_free_address;
+        uintptr_t offset_address = next_free_address_back;
 
 #if WITH_DEBUG_CANARIES
         // Making sure there is enough space to write canary
@@ -170,11 +170,11 @@ class DoubleEndedStackAllocator
         offset_address -= sizeof(Metadata);
 
         // Allocate with negative alignment and correct offset address (provide prev metadata address)
-        uintptr_t allocation_address = Allocate(size, -alignment, offset_address, current_back_address);
+        uintptr_t allocation_address = Allocate(size, -alignment, offset_address, last_data_begin_address_back);
 
         // Update internal address pointers
-        current_back_address = allocation_address;
-        current_back_free_address = allocation_address - sizeof(Metadata);
+        last_data_begin_address_back = allocation_address;
+        next_free_address_back = allocation_address - sizeof(Metadata);
 
         return reinterpret_cast<void *>(allocation_address);
     }
@@ -183,32 +183,32 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal front addresses
     void Free(void *memory)
     {
-        assertm(current_front_address != allocation_begin, "Cannot free an empty front");
+        assertm(last_data_begin_address_front != allocation_begin, "Cannot free an empty front");
 
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
-        assertm(address == current_front_address, "Free must be called LIFO!");
+        assertm(address == last_data_begin_address_front, "Free must be called LIFO!");
 
-        Metadata *metadata = ReadMetadata(current_front_address);
+        Metadata *metadata = ReadMetadata(last_data_begin_address_front);
 
         // Set current to previous address
-        current_front_address = metadata->previous_address;
+        last_data_begin_address_front = metadata->previous_address;
 
         // If beginning reached, set free address to beginning
-        if (current_front_address == allocation_begin)
+        if (last_data_begin_address_front == allocation_begin)
         {
-            current_front_free_address = allocation_begin;
+            next_free_address_front = allocation_begin;
             return;
         }
 
         // Read data from new front
-        metadata = ReadMetadata(current_front_address);
+        metadata = ReadMetadata(last_data_begin_address_front);
         // Add data size from new front
-        current_front_free_address = current_front_address + metadata->content_size;
+        next_free_address_front = last_data_begin_address_front + metadata->content_size;
 
 #if WITH_DEBUG_CANARIES
         // Add Canary
-        current_front_free_address += sizeof(CANARY);
+        next_free_address_front += sizeof(CANARY);
 #endif
     }
 
@@ -216,37 +216,37 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal back addresses
     void FreeBack(void *memory)
     {
-        assertm(current_back_address != allocation_end, "Cannot free an empty back");
+        assertm(last_data_begin_address_back != allocation_end, "Cannot free an empty back");
 
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
-        assertm(address == current_back_address, "FreeBack must be called LIFO!");
+        assertm(address == last_data_begin_address_back, "FreeBack must be called LIFO!");
 
-        Metadata *metadata = ReadMetadata(current_back_address);
+        Metadata *metadata = ReadMetadata(last_data_begin_address_back);
 
         // Set current to previous address
-        current_back_address = metadata->previous_address;
+        last_data_begin_address_back = metadata->previous_address;
 
         // If end reached, set free address to end
-        if (current_back_address == allocation_end)
+        if (last_data_begin_address_back == allocation_end)
         {
-            current_back_free_address = allocation_end;
+            next_free_address_back = allocation_end;
             return;
         }
 
         // Add data size from new back
-        current_back_free_address = current_back_address - sizeof(Metadata);
+        next_free_address_back = last_data_begin_address_back - sizeof(Metadata);
     }
 
     // Clear the internal state so that the whole allocator range is available again.
     void Reset(void)
     {
         // Reset the pointers to the outer edges of the allocation
-        current_front_address = allocation_begin;
-        current_back_address = allocation_end;
+        last_data_begin_address_front = allocation_begin;
+        last_data_begin_address_back = allocation_end;
 
-        current_front_free_address = allocation_begin;
-        current_back_free_address = allocation_end;
+        next_free_address_front = allocation_begin;
+        next_free_address_back = allocation_end;
     }
 
   private:
@@ -255,11 +255,11 @@ class DoubleEndedStackAllocator
     // The end address of the allocator (for fixed size)
     uintptr_t allocation_end;
 
-    uintptr_t current_front_address;
-    uintptr_t current_back_address;
+    uintptr_t last_data_begin_address_front;
+    uintptr_t last_data_begin_address_back;
 
-    uintptr_t current_front_free_address;
-    uintptr_t current_back_free_address;
+    uintptr_t next_free_address_front;
+    uintptr_t next_free_address_back;
 
     // Returns the the aligned address of the allocation
     uintptr_t Allocate(size_t size, int64_t alignment, uintptr_t offset_address, uintptr_t previous_address)
