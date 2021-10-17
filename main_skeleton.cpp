@@ -131,13 +131,18 @@ class DoubleEndedStackAllocator
         assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
 
         uintptr_t offset_address = next_free_address_front;
-        // Making sure there is enough space to write metadata
+#if WITH_DEBUG_CANARIES
+        // Making sure there is enough space to write canary 
+        offset_address += sizeof(CANARY);
+#endif
+        // Making sure there is enough space to write metadata 
         offset_address += sizeof(Metadata);
+            
 
         uintptr_t aligned_address = Align(offset_address, alignment);
 
 #if WITH_DEBUG_CANARIES
-        if (aligned_address + size + sizeof(CANARY) > next_free_address_back)
+        if (aligned_address + size + sizeof(CANARY)*2 > next_free_address_back)
 #else
         if (aligned_address + size > next_free_address_back)
 #endif
@@ -177,12 +182,12 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space for the content
         offset_address -= size;
 
-        // Making sure there is enough space to write metadata
-        offset_address -= sizeof(Metadata);
-
         uintptr_t aligned_address = Align(offset_address, -alignment);
-
+#if WITH_DEBUG_CANARIES
+        if (aligned_address - sizeof(Metadata) - sizeof(CANARY) < next_free_address_front)
+#elif
         if (aligned_address - sizeof(Metadata) < next_free_address_front)
+#endif
         {
             // Overlap -> out of space!
             assertm(false, "AllocateBack failed due to lack of space!");
@@ -195,6 +200,9 @@ class DoubleEndedStackAllocator
         // Update internal address pointers
         last_data_begin_address_back = allocation_address;
         next_free_address_back = allocation_address - sizeof(Metadata);
+#if WITH_DEBUG_CANARIES
+        next_free_address_back -= sizeof(CANARY);
+#endif
 
         return reinterpret_cast<void *>(allocation_address);
     }
@@ -213,9 +221,11 @@ class DoubleEndedStackAllocator
         Metadata *metadata = ReadMetadata(last_data_begin_address_front);
 
 #if WITH_DEBUG_CANARIES
-        // Check canary
-        assertm(IsCanaryValid(last_data_begin_address_front, metadata->content_size),
-                "Canary at freed address was overwritten - the memory is corrupted!");
+        // Check canaries
+        assertm(IsCanaryValid(last_data_begin_address_front - sizeof(Metadata) - sizeof(CANARY)),
+                "First canary was overwritten - the memory is corrupted!");
+        assertm(IsCanaryValid(last_data_begin_address_front + metadata->content_size),
+                "Second canary was overwritten - the memory is corrupted!");
 #endif
 
         // Set current to previous address
@@ -254,8 +264,10 @@ class DoubleEndedStackAllocator
 
 #if WITH_DEBUG_CANARIES
         // Check canary
-        assertm(IsCanaryValid(last_data_begin_address_back, metadata->content_size),
-                "Canary at freed address was overwritten - the memory is corrupted!");
+        assertm(IsCanaryValid(last_data_begin_address_back - sizeof(Metadata) - sizeof(CANARY)),
+                "First Canary was overwritten - the memory is corrupted!");
+        assertm(IsCanaryValid(last_data_begin_address_back + metadata->content_size),
+                "Second Canary was overwritten - the memory is corrupted!");
 #endif
 
         // Set current to previous address
@@ -270,6 +282,9 @@ class DoubleEndedStackAllocator
 
         // Add data size from new back
         next_free_address_back = last_data_begin_address_back - sizeof(Metadata);
+#if WITH_DEBUG_CANARIES
+        next_free_address_back -= sizeof(CANARY);
+#endif
     }
 
     // Clear the internal state so that the whole allocator range is available again.
@@ -302,7 +317,8 @@ class DoubleEndedStackAllocator
         WriteMeta(aligned_address, size, previous_address);
 #if WITH_DEBUG_CANARIES
         // Write canaries at end of content
-        WriteCanary(aligned_address, size);
+        WriteCanary(aligned_address+size);
+        WriteCanary(aligned_address - sizeof(Metadata)-sizeof(CANARY));
 #endif
         return aligned_address;
     }
@@ -320,16 +336,14 @@ class DoubleEndedStackAllocator
     }
 
 #if WITH_DEBUG_CANARIES
-    static void WriteCanary(uintptr_t address, size_t contentSize)
+    static void WriteCanary(uintptr_t address)
     {
-        uintptr_t canaryAddress = address + contentSize;
-        *reinterpret_cast<uint16_t *>(canaryAddress) = uint16_t(CANARY);
+        *reinterpret_cast<uint16_t *>(address) = uint16_t(CANARY);
     }
 
-    static bool IsCanaryValid(uintptr_t address, size_t contentSize)
+    static bool IsCanaryValid(uintptr_t address)
     {
-        uintptr_t canaryAddress = address + contentSize;
-        return *reinterpret_cast<uint16_t *>(canaryAddress) == uint16_t(CANARY);
+        return *reinterpret_cast<uint16_t *>(address) == uint16_t(CANARY);
     }
 #endif
 
@@ -373,7 +387,7 @@ int main()
     auto c_uint8_t_pointer = reinterpret_cast<uint8_t *>(c);
     for (int i = 0; i < 121; i++)
     {
-        *c_uint8_t_pointer = 0xC1;
+        *c_uint8_t_pointer = 0xCC;
         c_uint8_t_pointer++;
     }
     auto d = allocator.AllocateBack(32, 4);
