@@ -126,7 +126,6 @@ class DoubleEndedStackAllocator
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
-    // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
     void *Allocate(size_t size, int64_t alignment)
     {
         assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
@@ -135,9 +134,17 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
 
+        uintptr_t aligned_address = Align(offset_address, alignment);
+
+        if (aligned_address > next_free_address_back)
+        {
+            // Overlap -> out of space!
+            assertm(false, "Allocate failed due to lack of space!");
+            return nullptr;
+        }
+
         // Allocate using correct offeset address (provide prev metadata address)
-        uintptr_t allocation_address =
-            AllocateInternal(size, (int)alignment, offset_address, last_data_begin_address_front);
+        uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_front);
 
         // Update internal address pointers
         last_data_begin_address_front = allocation_address;
@@ -152,7 +159,6 @@ class DoubleEndedStackAllocator
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
-    // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
     void *AllocateBack(size_t size, int64_t alignment)
     {
         assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
@@ -170,8 +176,17 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space to write metadata
         offset_address -= sizeof(Metadata);
 
+        uintptr_t aligned_address = Align(offset_address, -alignment);
+
+        if (aligned_address < next_free_address_front)
+        {
+            // Overlap -> out of space!
+            assertm(false, "AllocateBack failed due to lack of space!");
+            return nullptr;
+        }
+
         // Allocate with negative alignment and correct offset address (provide prev metadata address)
-        uintptr_t allocation_address = AllocateInternal(size, -alignment, offset_address, last_data_begin_address_back);
+        uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_back);
 
         // Update internal address pointers
         last_data_begin_address_back = allocation_address;
@@ -263,11 +278,8 @@ class DoubleEndedStackAllocator
     uintptr_t next_free_address_back;
 
     // Returns the the aligned address of the allocation
-    uintptr_t AllocateInternal(size_t size, int64_t alignment, uintptr_t offset_address, uintptr_t previous_address)
+    uintptr_t AllocateInternal(size_t size, uintptr_t aligned_address, uintptr_t previous_address)
     {
-        // Align address
-        uintptr_t aligned_address = Align(offset_address, alignment);
-
         // Write metadata
         WriteMeta(aligned_address, size, previous_address);
 #if WITH_DEBUG_CANARIES
