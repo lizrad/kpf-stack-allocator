@@ -118,7 +118,7 @@ class DoubleEndedStackAllocator
 
     /**
      * Memory layout of content is:
-     * ...[previous Canary][   ][Metadata][Content][Canary][   ][next Metadata]....
+     * ...[previous Content][previous Canary][   ][Canary][Metadata][Content][Canary][   ][next Canary][next Metadata]....
      * Pointer points to border of Metadata and Content.
      * [Content] Block will be on aligned adress.
      * This means there might be unused space (note the [   ] blocks above) before Metadata.
