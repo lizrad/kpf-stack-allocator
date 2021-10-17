@@ -4,11 +4,14 @@
  **/
 
 #include "stdio.h"
+#include <cassert>
 #include <cstdint>
 #include <iostream>
 #include <malloc.h>
-#include <cassert>
 #include <new>
+
+// Use (void) to silent unused warnings.
+#define assertm(exp, msg) assert(((void)msg, exp))
 
 namespace Tests
 {
@@ -63,9 +66,6 @@ namespace Tests
 
 #if WITH_DEBUG_CANARIES
 static const uint16_t CANARY = 0x0DD0;
-static const size_t CANARY_SIZE = sizeof(CANARY);
-#else
-static const uintptr_t CANARY_SIZE = 0;
 #endif
 
 struct Metadata
@@ -93,7 +93,7 @@ class DoubleEndedStackAllocator
     {
         void *begin = malloc(max_size);
 
-        // TODO: Error handling
+        assertm(begin != nullptr, "Malloc failed!");
 
         // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
         allocation_begin = reinterpret_cast<uintptr_t>(begin);
@@ -129,7 +129,8 @@ class DoubleEndedStackAllocator
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
     void *Allocate(size_t size, int64_t alignment)
     {
-        assert(("Allocation only works with an alignement of the power of two", alignment % 2 == 0));
+        assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
+
         uintptr_t offset_address = current_front_free_address;
         // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
@@ -153,8 +154,10 @@ class DoubleEndedStackAllocator
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
     void *AllocateBack(size_t size, int64_t alignment)
     {
-        assert(("Allocation only works with an alignement of the power of two", alignment % 2 == 0));
+        assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
+
         uintptr_t offset_address = current_back_free_address;
+
 #if WITH_DEBUG_CANARIES
         // Making sure there is enough space to write canary
         offset_address -= sizeof(CANARY);
@@ -180,9 +183,12 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal front addresses
     void Free(void *memory)
     {
-        assert(("Cannot free an empty front", current_front_address != allocation_begin));
+        assertm(current_front_address != allocation_begin, "Cannot free an empty front");
+
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
+        assertm(address == current_front_address, "Free must be called LIFO!");
+
         Metadata *metadata = ReadMetadata(current_front_address);
 
         // Set current to previous address
@@ -210,9 +216,12 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal back addresses
     void FreeBack(void *memory)
     {
-        assert(("Cannot free an empty back", current_back_address != allocation_end));
+        assertm(current_back_address != allocation_end, "Cannot free an empty back");
+
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
+        assertm(address == current_back_address, "FreeBack must be called LIFO!");
+
         Metadata *metadata = ReadMetadata(current_back_address);
 
         // Set current to previous address
@@ -290,7 +299,7 @@ class DoubleEndedStackAllocator
     // Negative alignment for AlignDown
     uintptr_t Align(uintptr_t address, int64_t alignment)
     {
-        return (address & ~(abs(alignment) - 1)) + alignment;
+        return (address & ~(std::abs(alignment) - 1)) + alignment;
     }
 };
 
