@@ -208,6 +208,12 @@ class DoubleEndedStackAllocator
 
         Metadata *metadata = ReadMetadata(last_data_begin_address_front);
 
+#if WITH_DEBUG_CANARIES
+        // Check canary
+        assertm(IsCanaryValid(last_data_begin_address_front, metadata->content_size),
+                "Canary at freed address was overwritten - the memory is corrupted!");
+#endif
+
         // Set current to previous address
         last_data_begin_address_front = metadata->previous_address;
 
@@ -241,6 +247,12 @@ class DoubleEndedStackAllocator
         assertm(address == last_data_begin_address_back, "FreeBack must be called LIFO!");
 
         Metadata *metadata = ReadMetadata(last_data_begin_address_back);
+
+#if WITH_DEBUG_CANARIES
+        // Check canary
+        assertm(IsCanaryValid(last_data_begin_address_back, metadata->content_size),
+                "Canary at freed address was overwritten - the memory is corrupted!");
+#endif
 
         // Set current to previous address
         last_data_begin_address_back = metadata->previous_address;
@@ -308,6 +320,12 @@ class DoubleEndedStackAllocator
     {
         uintptr_t canaryAddress = address + contentSize;
         *reinterpret_cast<uint16_t *>(canaryAddress) = uint16_t(CANARY);
+    }
+
+    static bool IsCanaryValid(uintptr_t address, size_t contentSize)
+    {
+        uintptr_t canaryAddress = address + contentSize;
+        return *reinterpret_cast<uint16_t *>(canaryAddress) == uint16_t(CANARY);
     }
 #endif
 
