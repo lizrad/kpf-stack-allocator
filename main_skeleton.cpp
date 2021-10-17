@@ -136,7 +136,11 @@ class DoubleEndedStackAllocator
 
         uintptr_t aligned_address = Align(offset_address, alignment);
 
-        if (aligned_address > next_free_address_back)
+#if WITH_DEBUG_CANARIES
+        if (aligned_address + size + sizeof(CANARY) > next_free_address_back)
+#else
+        if (aligned_address + size > next_free_address_back)
+#endif
         {
             // Overlap -> out of space!
             assertm(false, "Allocate failed due to lack of space!");
@@ -178,7 +182,7 @@ class DoubleEndedStackAllocator
 
         uintptr_t aligned_address = Align(offset_address, -alignment);
 
-        if (aligned_address < next_free_address_front)
+        if (aligned_address - sizeof(Metadata) < next_free_address_front)
         {
             // Overlap -> out of space!
             assertm(false, "AllocateBack failed due to lack of space!");
