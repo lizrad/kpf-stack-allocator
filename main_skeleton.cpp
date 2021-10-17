@@ -136,7 +136,8 @@ class DoubleEndedStackAllocator
         offset_address += sizeof(Metadata);
 
         // Allocate using correct offeset address (provide prev metadata address)
-        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address, last_data_begin_address_front);
+        uintptr_t allocation_address =
+            AllocateInternal(size, (int)alignment, offset_address, last_data_begin_address_front);
 
         // Update internal address pointers
         last_data_begin_address_front = allocation_address;
@@ -170,7 +171,7 @@ class DoubleEndedStackAllocator
         offset_address -= sizeof(Metadata);
 
         // Allocate with negative alignment and correct offset address (provide prev metadata address)
-        uintptr_t allocation_address = Allocate(size, -alignment, offset_address, last_data_begin_address_back);
+        uintptr_t allocation_address = AllocateInternal(size, -alignment, offset_address, last_data_begin_address_back);
 
         // Update internal address pointers
         last_data_begin_address_back = allocation_address;
@@ -262,7 +263,7 @@ class DoubleEndedStackAllocator
     uintptr_t next_free_address_back;
 
     // Returns the the aligned address of the allocation
-    uintptr_t Allocate(size_t size, int64_t alignment, uintptr_t offset_address, uintptr_t previous_address)
+    uintptr_t AllocateInternal(size_t size, int64_t alignment, uintptr_t offset_address, uintptr_t previous_address)
     {
         // Align address
         uintptr_t aligned_address = Align(offset_address, alignment);
