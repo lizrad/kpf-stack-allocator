@@ -199,9 +199,10 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal front addresses
     void Free(void *memory)
     {
+        // Is there anything to free?
         assertm(last_data_begin_address_front != allocation_begin, "Cannot free an empty front");
 
-        // TODO: Handle on enmpty?
+        // Is the user calling LIFO as intended?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
         assertm(address == last_data_begin_address_front, "Free must be called LIFO!");
 
@@ -232,9 +233,10 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal back addresses
     void FreeBack(void *memory)
     {
+        // Is there anything to free?
         assertm(last_data_begin_address_back != allocation_end, "Cannot free an empty back");
 
-        // TODO: Handle on enmpty?
+        // Is the user calling LIFO as intended?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
         assertm(address == last_data_begin_address_back, "FreeBack must be called LIFO!");
 
