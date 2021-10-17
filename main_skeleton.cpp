@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iostream>
 #include <malloc.h>
+#include <cassert>
 #include <new>
 
 namespace Tests
@@ -126,8 +127,9 @@ class DoubleEndedStackAllocator
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
-    void *Allocate(size_t size, intptr_t alignment)
+    void *Allocate(size_t size, int64_t alignment)
     {
+        assert(("Allocation only works with an alignement of the power of two", alignment % 2 == 0));
         uintptr_t offset_address = current_front_free_address;
         // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
@@ -149,8 +151,9 @@ class DoubleEndedStackAllocator
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
-    void *AllocateBack(size_t size, intptr_t alignment)
+    void *AllocateBack(size_t size, int64_t alignment)
     {
+        assert(("Allocation only works with an alignement of the power of two", alignment % 2 == 0));
         uintptr_t offset_address = current_back_free_address;
 #if WITH_DEBUG_CANARIES
         // Making sure there is enough space to write canary
@@ -177,6 +180,7 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal front addresses
     void Free(void *memory)
     {
+        assert(("Cannot free an empty front", current_front_address != allocation_begin));
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
         Metadata *metadata = ReadMetadata(current_front_address);
@@ -206,6 +210,7 @@ class DoubleEndedStackAllocator
     // Frees the given memory by moving the internal back addresses
     void FreeBack(void *memory)
     {
+        assert(("Cannot free an empty back", current_back_address != allocation_end));
         // TODO: Handle on enmpty?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
         Metadata *metadata = ReadMetadata(current_back_address);
@@ -248,7 +253,7 @@ class DoubleEndedStackAllocator
     uintptr_t current_back_free_address;
 
     // Returns the the aligned address of the allocation
-    uintptr_t Allocate(size_t size, intptr_t alignment, uintptr_t offset_address, uintptr_t previous_address)
+    uintptr_t Allocate(size_t size, int64_t alignment, uintptr_t offset_address, uintptr_t previous_address)
     {
         // Align address
         uintptr_t aligned_address = Align(offset_address, alignment);
@@ -283,7 +288,7 @@ class DoubleEndedStackAllocator
 #endif
 
     // Negative alignment for AlignDown
-    uintptr_t Align(uintptr_t address, intptr_t alignment)
+    uintptr_t Align(uintptr_t address, int64_t alignment)
     {
         return (address & ~(abs(alignment) - 1)) + alignment;
     }
