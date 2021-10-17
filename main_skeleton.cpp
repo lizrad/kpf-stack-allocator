@@ -69,11 +69,9 @@ static const uintptr_t CANARY_SIZE = 0;
 
 struct Metadata
 {
-    Metadata(uintptr_t prevMetadataAddress, size_t contentSize)
-        : PrevMetadataAddress(prevMetadataAddress), ContentSize(contentSize)
+    Metadata(size_t contentSize) : ContentSize(contentSize)
     {
     }
-    uintptr_t PrevMetadataAddress;
     size_t ContentSize;
 };
 
@@ -120,89 +118,57 @@ class DoubleEndedStackAllocator
      * ...[previous Canary][   ][Metadata][Content][Canary][   ][next Metadata]....
      * Pointer points to border of Metadata and Content.
      * [Content] Block will be on aligned adress.
-     * This means there might me unused space (note the [   ] blocks above) before Metadata.
+     * This means there might be unused space (note the [   ] blocks above) before Metadata.
      **/
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
-    void *Allocate(size_t size, size_t alignment)
+    void *Allocate(size_t size, intptr_t alignment)
     {
-
-        uintptr_t actual_front = current_front_address;
-
-        // special case - first allocation:
-        // current_front_adress ist actually already free,
-        // so we don't have to offset by content size and canary
-
-        // else:
-        if (current_front_address != allocation_begin)
-        {
-            // Offsetting front address that points at start of content by size of content and canary size to actually
-            // get free space
-            Metadata *metadata = ReadMetadata(current_front_address);
-            actual_front += metadata->ContentSize;
-#if WITH_DEBUG_CANARIES
-            actual_front += sizeof(CANARY);
-#endif // WITH_DEBUG_CANARIES
-        }
-        uintptr_t offset_address = actual_front;
-        // making sure there is enough space to write metadata
+        uintptr_t offset_address = current_front_free_address;
+        // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
 
-        // align front
-        uintptr_t new_front = AlignUp(offset_address, alignment);
+        // Allocate using correct offeset address
+        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address);
 
-        // write metadata backwards from front
-        WriteMeta(new_front, current_front_address, size);
+        // Update internal address pointers
+        current_front_address = allocation_address;
+        current_front_free_address = allocation_address + size;
 #if WITH_DEBUG_CANARIES
-
-        // write canaries at end of content
-        WriteCanary(new_front, size);
+        // Add canary size to get correct free address
+        current_front_free_address += sizeof(CANARY);
 #endif
-        current_front_address = new_front;
 
-        return reinterpret_cast<void *>(new_front);
+        return reinterpret_cast<void *>(allocation_address);
     }
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     // TODO: Check for edgecases: not power of two alignment, enough size left, overlap etc.
-    void *AllocateBack(size_t size, size_t alignment)
+    void *AllocateBack(size_t size, intptr_t alignment)
     {
-        uintptr_t actual_back = current_back_address;
-
-        // special case - first allocation:
-        // current_back_address ist actually already free,
-        // so we don't have to offset by content size and canary
-        if (current_back_address != allocation_end)
-        {
-            // Offsetting back address that points at end of metadata by metadata size
-            // free space
-            actual_back -= sizeof(Metadata);
-        }
-
-        uintptr_t offset_address = actual_back;
+        uintptr_t offset_address = current_back_free_address;
 #if WITH_DEBUG_CANARIES
-        // making sure there is enough space to write canary
+        // Making sure there is enough space to write canary
         offset_address -= sizeof(CANARY);
-        // align front
-#endif // WITH_DEBUG_CANARIES
-
-        // making sure there is enough space for the content
-        offset_address -= size;
-        uintptr_t new_back = AlignDown(offset_address, alignment);
-
-        // write metadata backwards from
-        WriteMeta(new_back, current_back_address, size);
-#if WITH_DEBUG_CANARIES
-
-        // write canaries at end of content
-        WriteCanary(new_back, size);
 #endif
-        current_back_address = new_back;
 
-        return reinterpret_cast<void *>(new_back);
+        // Making sure there is enough space for the content
+        offset_address -= size;
+
+        // Making sure there is enough space to write metadata
+        offset_address -= sizeof(Metadata);
+
+        // Allocate with negative alignment and correct offset address
+        uintptr_t allocation_address = Allocate(size, -alignment, offset_address);
+
+        // Update internal address pointers
+        current_back_address = allocation_address;
+        current_back_free_address = allocation_address - sizeof(Metadata);
+
+        return reinterpret_cast<void *>(allocation_address);
     }
 
     // LIFO is assumed.
@@ -221,23 +187,47 @@ class DoubleEndedStackAllocator
         // Reset the pointers to the outer edges of the allocation
         current_front_address = allocation_begin;
         current_back_address = allocation_end;
+
+        current_front_free_address = allocation_begin;
+        current_back_free_address = allocation_end;
     }
-    static Metadata *ReadMetadata(uintptr_t address)
+    Metadata *ReadMetadata(uintptr_t address) const
     {
+        // TODO: Handle Metadata not found
         return reinterpret_cast<Metadata *>(address - sizeof(Metadata));
     }
 
   private:
+    // The start address of the allocator
     uintptr_t allocation_begin;
+    // The end address of the allocator (for fixed size)
     uintptr_t allocation_end;
 
     uintptr_t current_front_address;
     uintptr_t current_back_address;
 
-    void WriteMeta(uintptr_t address, uintptr_t prevMetadataAddress, size_t contentSize)
+    uintptr_t current_front_free_address;
+    uintptr_t current_back_free_address;
+
+    // Returns the the aligned address of the allocation
+    uintptr_t Allocate(size_t size, intptr_t alignment, uintptr_t offset_address)
+    {
+        // Align address
+        uintptr_t aligned_address = Align(offset_address, alignment);
+
+        // Write metadata
+        WriteMeta(aligned_address, size);
+#if WITH_DEBUG_CANARIES
+        // Write canaries at end of content
+        WriteCanary(aligned_address, size);
+#endif
+        return aligned_address;
+    }
+
+    void WriteMeta(uintptr_t address, size_t contentSize)
     {
         uintptr_t metadataAddress = address - sizeof(Metadata);
-        *reinterpret_cast<Metadata *>(metadataAddress) = Metadata(prevMetadataAddress, contentSize);
+        *reinterpret_cast<Metadata *>(metadataAddress) = Metadata(contentSize);
     }
 
 #if WITH_DEBUG_CANARIES
@@ -248,13 +238,10 @@ class DoubleEndedStackAllocator
     }
 #endif
 
-    uintptr_t AlignUp(uintptr_t address, size_t alignment)
+    // Negative alignment for AlignDown
+    uintptr_t Align(uintptr_t address, intptr_t alignment)
     {
-        return (address & ~(alignment - 1)) + alignment;
-    }
-    uintptr_t AlignDown(uintptr_t address, size_t alignment)
-    {
-        return (address & ~(alignment - 1)) - alignment;
+        return (address & ~(abs(alignment) - 1)) + alignment;
     }
 };
 
