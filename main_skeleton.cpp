@@ -93,6 +93,8 @@ class DoubleEndedStackAllocator
     {
         void *begin = malloc(max_size);
 
+        // not handling this here in release, because undefined behaviour would only appear in allocate functions where
+        // we catch it by returning a nullptr
         assertm(begin != nullptr, "Malloc failed!");
 
         // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
@@ -118,31 +120,38 @@ class DoubleEndedStackAllocator
 
     /**
      * Memory layout of content is:
-     * ...[previous Content][previous Canary][   ][Canary][Metadata][Content][Canary][   ][next Canary][next Metadata]....
-     * Pointer points to border of Metadata and Content.
-     * [Content] Block will be on aligned adress.
-     * This means there might be unused space (note the [   ] blocks above) before Metadata.
+     * ...[previous Content][previous Canary][   ][Canary][Metadata][Content][Canary][   ][next Canary][nextMetadata].... 
+     * Pointer points to border of Metadata and Content. [Content] Block will be on aligned adress. This
+     * means there might be unused space (note the [   ] blocks above) before Metadata.
      **/
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     void *Allocate(size_t size, int64_t alignment)
     {
-        assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
+        if (next_free_address_front == reinterpret_cast<uintptr_t>(nullptr))
+        {
+            assertm(false, "Allocator did not allocate any memory");
+            return nullptr;
+        }
+        if (alignment % 2 != 0)
+        {
+            assertm(false, "Allocation only works with an alignement of the power of two");
+            return nullptr;
+        }
 
         uintptr_t offset_address = next_free_address_front;
 #if WITH_DEBUG_CANARIES
-        // Making sure there is enough space to write canary 
+        // Making sure there is enough space to write canary
         offset_address += sizeof(CANARY);
 #endif
-        // Making sure there is enough space to write metadata 
+        // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
-            
 
         uintptr_t aligned_address = Align(offset_address, alignment);
 
 #if WITH_DEBUG_CANARIES
-        if (aligned_address + size + sizeof(CANARY)*2 > next_free_address_back)
+        if (aligned_address + size + sizeof(CANARY) * 2 > next_free_address_back)
 #else
         if (aligned_address + size > next_free_address_back)
 #endif
@@ -170,7 +179,16 @@ class DoubleEndedStackAllocator
     // Returns a nullptr if there is not enough memory left.
     void *AllocateBack(size_t size, int64_t alignment)
     {
-        assertm(alignment % 2 == 0, "Allocation only works with an alignement of the power of two");
+        if (next_free_address_back == reinterpret_cast<uintptr_t>(nullptr))
+        {
+            assertm(false, "Allocator did not allocate any memory");
+            return nullptr;
+        }
+        if (alignment % 2 != 0)
+        {
+            assertm(false, "Allocation only works with an alignement of the power of two");
+            return nullptr;
+        }
 
         uintptr_t offset_address = next_free_address_back;
 
@@ -212,14 +230,24 @@ class DoubleEndedStackAllocator
     void Free(void *memory)
     {
         // Is there anything to free?
-        assertm(last_data_begin_address_front != allocation_begin, "Cannot free an empty front");
+        if (last_data_begin_address_front == allocation_begin)
+        {
+            assertm(false, "Cannot free an empty front");
+            return;
+        }
 
         // Is the user calling LIFO as intended?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
-        assertm(address == last_data_begin_address_front, "Free must be called LIFO!");
+        if (address != last_data_begin_address_front)
+        {
+
+            assertm(false, "Free must be called LIFO!");
+            return;
+        }
 
         Metadata *metadata = ReadMetadata(last_data_begin_address_front);
 
+        // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
 #if WITH_DEBUG_CANARIES
         // Check canaries
         assertm(IsCanaryValid(last_data_begin_address_front - sizeof(Metadata) - sizeof(CANARY)),
@@ -254,14 +282,22 @@ class DoubleEndedStackAllocator
     void FreeBack(void *memory)
     {
         // Is there anything to free?
-        assertm(last_data_begin_address_back != allocation_end, "Cannot free an empty back");
+        if (last_data_begin_address_back == allocation_end)
+        {
+            assertm(false, "Cannot free an empty back");
+            return;
+        }
 
         // Is the user calling LIFO as intended?
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
-        assertm(address == last_data_begin_address_back, "FreeBack must be called LIFO!");
-
+        if (address != last_data_begin_address_back)
+        {
+            assertm(false, "FreeBack must be called LIFO!");
+            return;
+        }
         Metadata *metadata = ReadMetadata(last_data_begin_address_back);
 
+        // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
 #if WITH_DEBUG_CANARIES
         // Check canary
         assertm(IsCanaryValid(last_data_begin_address_back - sizeof(Metadata) - sizeof(CANARY)),
@@ -317,8 +353,8 @@ class DoubleEndedStackAllocator
         WriteMeta(aligned_address, size, previous_address);
 #if WITH_DEBUG_CANARIES
         // Write canaries at end of content
-        WriteCanary(aligned_address+size);
-        WriteCanary(aligned_address - sizeof(Metadata)-sizeof(CANARY));
+        WriteCanary(aligned_address + size);
+        WriteCanary(aligned_address - sizeof(Metadata) - sizeof(CANARY));
 #endif
         return aligned_address;
     }
@@ -455,7 +491,6 @@ int main()
         *j_uint8_t_pointer = 0x66;
         j_uint8_t_pointer++;
     }
-
     // Here the assignment tests will happen - it will test basic allocator functionality.
     {
     }
