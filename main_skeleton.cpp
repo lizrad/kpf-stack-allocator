@@ -69,10 +69,12 @@ static const uintptr_t CANARY_SIZE = 0;
 
 struct Metadata
 {
-    Metadata(size_t contentSize) : ContentSize(contentSize)
+    Metadata(size_t content_size, uintptr_t previous_address)
+        : content_size(content_size), previous_address(previous_address)
     {
     }
-    size_t ContentSize;
+    size_t content_size;
+    uintptr_t previous_address;
 };
 
 /**
@@ -130,8 +132,8 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space to write metadata
         offset_address += sizeof(Metadata);
 
-        // Allocate using correct offeset address
-        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address);
+        // Allocate using correct offeset address (provide prev metadata address)
+        uintptr_t allocation_address = Allocate(size, (int)alignment, offset_address, current_front_address);
 
         // Update internal address pointers
         current_front_address = allocation_address;
@@ -161,8 +163,8 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space to write metadata
         offset_address -= sizeof(Metadata);
 
-        // Allocate with negative alignment and correct offset address
-        uintptr_t allocation_address = Allocate(size, -alignment, offset_address);
+        // Allocate with negative alignment and correct offset address (provide prev metadata address)
+        uintptr_t allocation_address = Allocate(size, -alignment, offset_address, current_back_address);
 
         // Update internal address pointers
         current_back_address = allocation_address;
@@ -172,13 +174,54 @@ class DoubleEndedStackAllocator
     }
 
     // LIFO is assumed.
+    // Frees the given memory by moving the internal front addresses
     void Free(void *memory)
     {
-        // TODO: Read metadata and move the pointer accordingly
+        // TODO: Handle on enmpty?
+        uintptr_t address = reinterpret_cast<uintptr_t>(memory);
+        Metadata *metadata = ReadMetadata(current_front_address);
+
+        // Set current to previous address
+        current_front_address = metadata->previous_address;
+
+        // If beginning reached, set free address to beginning
+        if (current_front_address == allocation_begin)
+        {
+            current_front_free_address = allocation_begin;
+            return;
+        }
+
+        // Read data from new front
+        metadata = ReadMetadata(current_front_address);
+        // Add data size from new front
+        current_front_free_address = current_front_address + metadata->content_size;
+
+#if WITH_DEBUG_CANARIES
+        // Add Canary
+        current_front_free_address += sizeof(CANARY);
+#endif
     }
+
+    // LIFO is assumed.
+    // Frees the given memory by moving the internal back addresses
     void FreeBack(void *memory)
     {
-        // TODO: Read metadata and move the pointer accordingly
+        // TODO: Handle on enmpty?
+        uintptr_t address = reinterpret_cast<uintptr_t>(memory);
+        Metadata *metadata = ReadMetadata(current_back_address);
+
+        // Set current to previous address
+        current_back_address = metadata->previous_address;
+
+        // If end reached, set free address to end
+        if (current_back_address == allocation_end)
+        {
+            current_back_free_address = allocation_end;
+            return;
+        }
+
+        // Add data size from new back
+        current_back_free_address = current_back_address - sizeof(Metadata);
     }
 
     // Clear the internal state so that the whole allocator range is available again.
@@ -190,11 +233,6 @@ class DoubleEndedStackAllocator
 
         current_front_free_address = allocation_begin;
         current_back_free_address = allocation_end;
-    }
-    Metadata *ReadMetadata(uintptr_t address) const
-    {
-        // TODO: Handle Metadata not found
-        return reinterpret_cast<Metadata *>(address - sizeof(Metadata));
     }
 
   private:
@@ -210,13 +248,13 @@ class DoubleEndedStackAllocator
     uintptr_t current_back_free_address;
 
     // Returns the the aligned address of the allocation
-    uintptr_t Allocate(size_t size, intptr_t alignment, uintptr_t offset_address)
+    uintptr_t Allocate(size_t size, intptr_t alignment, uintptr_t offset_address, uintptr_t previous_address)
     {
         // Align address
         uintptr_t aligned_address = Align(offset_address, alignment);
 
         // Write metadata
-        WriteMeta(aligned_address, size);
+        WriteMeta(aligned_address, size, previous_address);
 #if WITH_DEBUG_CANARIES
         // Write canaries at end of content
         WriteCanary(aligned_address, size);
@@ -224,10 +262,16 @@ class DoubleEndedStackAllocator
         return aligned_address;
     }
 
-    void WriteMeta(uintptr_t address, size_t contentSize)
+    void WriteMeta(uintptr_t address, size_t contentSize, uintptr_t previous_address)
     {
         uintptr_t metadataAddress = address - sizeof(Metadata);
-        *reinterpret_cast<Metadata *>(metadataAddress) = Metadata(contentSize);
+        *reinterpret_cast<Metadata *>(metadataAddress) = Metadata(contentSize, previous_address);
+    }
+
+    Metadata *ReadMetadata(uintptr_t address) const
+    {
+        // TODO: Handle Metadata not found
+        return reinterpret_cast<Metadata *>(address - sizeof(Metadata));
     }
 
 #if WITH_DEBUG_CANARIES
@@ -278,7 +322,7 @@ int main()
     auto c_uint8_t_pointer = reinterpret_cast<uint8_t *>(c);
     for (int i = 0; i < 121; i++)
     {
-        *c_uint8_t_pointer = 0xCC;
+        *c_uint8_t_pointer = 0xC1;
         c_uint8_t_pointer++;
     }
     auto d = allocator.AllocateBack(32, 4);
@@ -301,6 +345,50 @@ int main()
     {
         *f_uint8_t_pointer = 0xFF;
         f_uint8_t_pointer++;
+    }
+
+    allocator.Free(c);
+
+    auto g = allocator.Allocate(121, 16);
+    auto g_uint8_t_pointer = reinterpret_cast<uint8_t *>(g);
+    for (int i = 0; i < 121; i++)
+    {
+        *g_uint8_t_pointer = 0x99;
+        g_uint8_t_pointer++;
+    }
+
+    allocator.FreeBack(f);
+
+    auto h = allocator.AllocateBack(121, 16);
+    auto h_uint8_t_pointer = reinterpret_cast<uint8_t *>(h);
+    for (int i = 0; i < 121; i++)
+    {
+        *h_uint8_t_pointer = 0x88;
+        h_uint8_t_pointer++;
+    }
+
+    allocator.Free(g);
+    allocator.Free(b);
+    allocator.Free(a);
+
+    auto ii = allocator.Allocate(121, 4);
+    auto ii_uint8_t_pointer = reinterpret_cast<uint8_t *>(ii);
+    for (int i = 0; i < 121; i++)
+    {
+        *ii_uint8_t_pointer = 0x77;
+        ii_uint8_t_pointer++;
+    }
+
+    allocator.FreeBack(h);
+    allocator.FreeBack(e);
+    allocator.FreeBack(d);
+
+    auto j = allocator.AllocateBack(32, 4);
+    auto j_uint8_t_pointer = reinterpret_cast<uint8_t *>(j);
+    for (int i = 0; i < 32; i++)
+    {
+        *j_uint8_t_pointer = 0x66;
+        j_uint8_t_pointer++;
     }
 
     // Here the assignment tests will happen - it will test basic allocator functionality.
