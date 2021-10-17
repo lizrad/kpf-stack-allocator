@@ -118,18 +118,26 @@ class DoubleEndedStackAllocator
     DoubleEndedStackAllocator &operator=(const DoubleEndedStackAllocator &other) = delete;  // Copy Assignment Operator
     DoubleEndedStackAllocator &operator=(const DoubleEndedStackAllocator &&other) = delete; // Move Assignment Operator
 
+    // Returns `false` if the Allocator is in an unusable state, e.g. because the initial memory allocation failed.
+    bool IsValid()
+    {
+        // Fun fact: casting nullptr to uintptr_t is controversial, so we do it the other way
+        // https://stackoverflow.com/questions/60507186/can-nullptr-be-converted-to-uintptr-t-different-compilers-disagree
+        return reinterpret_cast<void *>(allocation_begin) != nullptr;
+    }
+
     /**
      * Memory layout of content is:
-     * ...[previous Content][previous Canary][   ][Canary][Metadata][Content][Canary][   ][next Canary][nextMetadata].... 
-     * Pointer points to border of Metadata and Content. [Content] Block will be on aligned adress. This
-     * means there might be unused space (note the [   ] blocks above) before Metadata.
+     * ...[previous Content][previous Canary][   ][Canary][Metadata][Content][Canary][   ][next
+     *Canary][nextMetadata].... Pointer points to border of Metadata and Content. [Content] Block will be on aligned
+     *adress. This means there might be unused space (note the [   ] blocks above) before Metadata.
      **/
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
     void *Allocate(size_t size, int64_t alignment)
     {
-        if (next_free_address_front == reinterpret_cast<uintptr_t>(nullptr))
+        if (reinterpret_cast<void *>(next_free_address_front) == nullptr)
         {
             assertm(false, "Allocator did not allocate any memory");
             return nullptr;
@@ -179,7 +187,7 @@ class DoubleEndedStackAllocator
     // Returns a nullptr if there is not enough memory left.
     void *AllocateBack(size_t size, int64_t alignment)
     {
-        if (next_free_address_back == reinterpret_cast<uintptr_t>(nullptr))
+        if (reinterpret_cast<void *>(next_free_address_back) == nullptr)
         {
             assertm(false, "Allocator did not allocate any memory");
             return nullptr;
