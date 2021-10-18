@@ -1,5 +1,5 @@
 /**
- * Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
+ * Exercise: "GROWING DoubleEndedStackAllocator with Canaries (VMEM)"
  * Group members: Amon Shokhin Ahmed (gs20m014), Karl Bittner (gs20m013), David Panagiotopulos (gs20m019)
  **/
 
