@@ -10,6 +10,7 @@
 #include <malloc.h>
 #include <new>
 #include <windows.h>
+#include <strsafe.h>
 
 // Use (void) to silent unused warnings.
 #define assertm(exp, msg) assert(((void)msg, exp))
@@ -103,30 +104,31 @@ class DoubleEndedStackAllocator
     DoubleEndedStackAllocator(size_t max_size)
     {
 #if USING_VIRTUAL_MEMORY
-        void* begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
-#elif
-        void *begin = malloc(max_size);
-#endif // USING_VIRTUAL_MEMORY
+        // reserve the max size and set its memory protection constants to no access so errors are noticable
+        void *begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
         // not handling this here in release, because undefined behaviour would only appear in allocate functions where
         // we catch it by returning a nullptr
-        assertm(begin != nullptr, "Malloc failed!");
+        assertm(begin != nullptr, "Memory reservation failed!");
 
-        // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
-        allocation_begin = reinterpret_cast<uintptr_t>(begin);
-        allocation_end = reinterpret_cast<uintptr_t>(begin) + max_size;
-
-#if USING_VIRTUAL_MEMORY
+        // look up page size
         SYSTEM_INFO system_info;
         GetSystemInfo(&system_info);
         page_size = system_info.dwPageSize;
-
-        page_start_front = allocation_begin;
-        page_start_back =  allocation_end - page_size;
-        //TODO: errorhandling here
-        VirtualAlloc(reinterpret_cast<void *>(page_start_front), page_size, MEM_COMMIT, PAGE_READWRITE);
-        VirtualAlloc(reinterpret_cast<void *>(page_start_back), page_size, MEM_COMMIT, PAGE_READWRITE);
 #elif
         void *begin = malloc(max_size);
+        // not handling this here in release, because undefined behaviour would only appear in allocate functions where
+        // we catch it by returning a nullptr
+        assertm(begin != nullptr, "Malloc failed!");
+#endif // USING_VIRTUAL_MEMORY
+
+        // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
+        allocation_begin = reinterpret_cast<uintptr_t>(begin);
+        allocation_end = allocation_begin + max_size;
+
+#if USING_VIRTUAL_MEMORY
+        //setting page starts back one fictious page so first allocations immediately trigger a new commit
+        page_start_front = allocation_begin - page_size;
+        page_start_back = allocation_end;
 #endif // USING_VIRTUAL_MEMORY
         // Initialize the current addresses to the edges of the allocated space
         Reset();
@@ -201,15 +203,29 @@ class DoubleEndedStackAllocator
         }
 
 #if USING_VIRTUAL_MEMORY
-        uintptr_t page_end = page_start_front + page_size;
 #if WITH_DEBUG_CANARIES
-        if (aligned_address + size + sizeof(CANARY) > page_end)
+
+        // while there is not enough space left on the current page
+        while (aligned_address + size + sizeof(CANARY) > page_start_front + page_size)
 #else
-        if (aligned_address + size > page_start_front + page_size)
+        while (aligned_address + size > page_start_front + page_size)
 #endif
         {
-            //TODO: error handling
-            page_start_front = reinterpret_cast<uintptr_t>(VirtualAlloc(reinterpret_cast<void *>(page_end), page_size, MEM_COMMIT, PAGE_READWRITE));
+            // try to commit another page
+            if (!VirtualAlloc(reinterpret_cast<void *>(page_start_front + page_size), page_size, MEM_COMMIT,
+                              PAGE_READWRITE))
+            {
+                // edgecase: there is enough space for the allocation from the current page on the other side but not
+                // enough space to commit another page from this side
+                // if that is not the case something else went wrong
+                if (page_start_front + page_size < page_start_back)
+                {
+                    assertm(false, "Front page commit failed!");
+                    return nullptr;
+                }
+            }
+
+            page_start_front += page_size;
         }
 #endif // USING_VIRTUAL_MEMORY
 
@@ -265,16 +281,26 @@ class DoubleEndedStackAllocator
         }
 
 #if USING_VIRTUAL_MEMORY
-        uintptr_t page_end = page_start_back;
 #if WITH_DEBUG_CANARIES
-        if (aligned_address - sizeof(Metadata) - sizeof(CANARY) < page_end)
+        // while there is not enough space left on the current page
+        while (aligned_address - sizeof(Metadata) - sizeof(CANARY) < page_start_back)
 #else
-        if (aligned_address - sizeof(Metadata) > page_end)
+        while (aligned_address - sizeof(Metadata) > page_start_back)
 #endif
         {
-            // TODO: error handling
-            page_start_back = reinterpret_cast<uintptr_t>(
-                VirtualAlloc(reinterpret_cast<void *>(page_end-page_size), page_size, MEM_COMMIT, PAGE_READWRITE));
+            //commit another page
+            if (!VirtualAlloc(reinterpret_cast<void *>(page_start_back- page_size), page_size, MEM_COMMIT, PAGE_READWRITE))
+            {
+                // edgecase: there is enough space for the allocation from the current page on the other side but not enough space to commit
+                // another page from this side 
+                //if that is not the case something else went wrong
+                if (page_start_back - page_size > page_start_back + page_size)
+                {
+                    assertm(false, "Back page commit failed!");
+                    return nullptr;
+                }
+            }
+            page_start_back -= page_size;
         }
 #endif // USING_VIRTUAL_MEMORY
 
