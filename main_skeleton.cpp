@@ -9,6 +9,7 @@
 #include <iostream>
 #include <malloc.h>
 #include <new>
+#include <windows.h>
 
 // Use (void) to silent unused warnings.
 #define assertm(exp, msg) assert(((void)msg, exp))
@@ -64,9 +65,19 @@ namespace Tests
 // If set to 1, Free() and FreeBack() should assert if the memory canaries are corrupted
 #define WITH_DEBUG_CANARIES 1
 
+// Using mainly: https://docs.microsoft.com/en-us/windows/win32/memory/reserving-and-committing-memory
+// Additional info used:
+// https://social.msdn.microsoft.com/Forums/vstudio/en-US/117512d6-c485-471e-b48b-30a610881129/how-to-use-virtualalloc?forum=vcgeneral
+// https://docs.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
+// https://docs.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getsysteminfo
+// https://docs.microsoft.com/en-us/windows/win32/memory/memory-protection-constants
+#define USING_VIRTUAL_MEMORY 1
+
+
 #if WITH_DEBUG_CANARIES
 static const uint16_t CANARY = 0x0DD0;
 #endif
+
 
 struct Metadata
 {
@@ -91,8 +102,11 @@ class DoubleEndedStackAllocator
   public:
     DoubleEndedStackAllocator(size_t max_size)
     {
+#if USING_VIRTUAL_MEMORY
+        void* begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
+#elif
         void *begin = malloc(max_size);
-
+#endif // USING_VIRTUAL_MEMORY
         // not handling this here in release, because undefined behaviour would only appear in allocate functions where
         // we catch it by returning a nullptr
         assertm(begin != nullptr, "Malloc failed!");
@@ -101,12 +115,29 @@ class DoubleEndedStackAllocator
         allocation_begin = reinterpret_cast<uintptr_t>(begin);
         allocation_end = reinterpret_cast<uintptr_t>(begin) + max_size;
 
+#if USING_VIRTUAL_MEMORY
+        SYSTEM_INFO system_info;
+        GetSystemInfo(&system_info);
+        page_size = system_info.dwPageSize;
+
+        page_start_front = allocation_begin;
+        page_start_back =  allocation_end - page_size;
+        //TODO: errorhandling here
+        VirtualAlloc(reinterpret_cast<void *>(page_start_front), page_size, MEM_COMMIT, PAGE_READWRITE);
+        VirtualAlloc(reinterpret_cast<void *>(page_start_back), page_size, MEM_COMMIT, PAGE_READWRITE);
+#elif
+        void *begin = malloc(max_size);
+#endif // USING_VIRTUAL_MEMORY
         // Initialize the current addresses to the edges of the allocated space
         Reset();
     }
     ~DoubleEndedStackAllocator(void)
     {
+#if USING_VIRTUAL_MEMORY
+        VirtualFree(reinterpret_cast<void*>(allocation_begin), 0, MEM_RELEASE);
+#elif
         free(reinterpret_cast<void *>(allocation_begin));
+#endif // USING_VIRTUAL_MEMORY
     }
 
     // Copy and Move Constructors / Assignment Operators are explicitly deleted.
@@ -151,7 +182,7 @@ class DoubleEndedStackAllocator
         uintptr_t aligned_address = Align(offset_address, alignment);
 
 #if WITH_DEBUG_CANARIES
-        if (aligned_address + size + sizeof(CANARY) * 2 > next_free_address_back)
+        if (aligned_address + size + sizeof(CANARY) > next_free_address_back)
 #else
         if (aligned_address + size > next_free_address_back)
 #endif
@@ -160,6 +191,19 @@ class DoubleEndedStackAllocator
             assertm(false, "Allocate failed due to lack of space!");
             return nullptr;
         }
+
+#if USING_VIRTUAL_MEMORY
+        uintptr_t page_end = page_start_front + page_size;
+#if WITH_DEBUG_CANARIES
+        if (aligned_address + size + sizeof(CANARY) > page_end)
+#else
+        if (aligned_address + size > page_start_front + page_size)
+#endif
+        {
+            //TODO: error handling
+            page_start_front = reinterpret_cast<uintptr_t>(VirtualAlloc(reinterpret_cast<void *>(page_end), page_size, MEM_COMMIT, PAGE_READWRITE));
+        }
+#endif // USING_VIRTUAL_MEMORY
 
         // Allocate using correct offeset address (provide prev metadata address)
         uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_front);
@@ -211,6 +255,21 @@ class DoubleEndedStackAllocator
             assertm(false, "AllocateBack failed due to lack of space!");
             return nullptr;
         }
+
+#if USING_VIRTUAL_MEMORY
+        uintptr_t page_end = page_start_back;
+#if WITH_DEBUG_CANARIES
+        if (aligned_address - sizeof(Metadata) - sizeof(CANARY) < page_end)
+#else
+        if (aligned_address - sizeof(Metadata) > page_end)
+#endif
+        {
+            // TODO: error handling
+            page_start_back = reinterpret_cast<uintptr_t>(
+                VirtualAlloc(reinterpret_cast<void *>(page_end-page_size), page_size, MEM_COMMIT, PAGE_READWRITE));
+        }
+#endif // USING_VIRTUAL_MEMORY
+
 
         // Allocate with negative alignment and correct offset address (provide prev metadata address)
         uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_back);
@@ -335,6 +394,11 @@ class DoubleEndedStackAllocator
     }
 
   private:
+#if USING_VIRTUAL_MEMORY
+    DWORD page_size;
+    uintptr_t page_start_front;
+    uintptr_t page_start_back;
+#endif
     // The start address of the allocator
     uintptr_t allocation_begin;
     // The end address of the allocator (for fixed size)
