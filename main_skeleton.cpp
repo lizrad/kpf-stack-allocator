@@ -9,8 +9,8 @@
 #include <iostream>
 #include <malloc.h>
 #include <new>
-#include <windows.h>
 #include <strsafe.h>
+#include <windows.h>
 
 // Use (void) to silent unused warnings.
 #define assertm(exp, msg) assert(((void)msg, exp))
@@ -103,7 +103,28 @@ namespace Tests
 
         return true;
     }
-}
+
+    template <class A> bool VerifyCanaryFailure(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        for (int i = 0; i < size + alignment; i++)
+        {
+            *mem_pointer = 0xAA;
+            mem_pointer++;
+        }
+
+        allocator.Free(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+} // namespace Tests
 
 // Assignment functionality tests are going to be included here
 
@@ -118,11 +139,9 @@ namespace Tests
 // https://docs.microsoft.com/en-us/windows/win32/memory/memory-protection-constants
 #define USING_VIRTUAL_MEMORY 1
 
-
 #if WITH_DEBUG_CANARIES
 static const uint16_t CANARY = 0x0DD0;
 #endif
-
 
 struct Metadata
 {
@@ -148,40 +167,51 @@ class DoubleEndedStackAllocator
     DoubleEndedStackAllocator(size_t max_size)
     {
 #if USING_VIRTUAL_MEMORY
-        // reserve the max size and set its memory protection constants to no access so errors are noticable
-        void *begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
-        // not handling this here in release, because undefined behaviour would only appear in allocate functions where
-        // we catch it by returning a nullptr
-        assertm(begin != nullptr, "Memory reservation failed!");
-
-        // look up page size
+        // Look up page size
         SYSTEM_INFO system_info;
         GetSystemInfo(&system_info);
         page_size = system_info.dwPageSize;
-#elif
+
+        // If given size is smaller than a page, use page size instead
+        max_size = max(max_size, page_size);
+
+        // Reserve the max size and set its memory protection constants to no access so errors are noticable
+        void *begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
+
+        // Not handling this here in release, because undefined behaviour would only appear in allocate functions where
+        // we catch it by returning a nullptr
+        assertm(begin != nullptr, "Memory reservation failed!");
+
+#else
         void *begin = malloc(max_size);
         // not handling this here in release, because undefined behaviour would only appear in allocate functions where
         // we catch it by returning a nullptr
         assertm(begin != nullptr, "Malloc failed!");
 #endif // USING_VIRTUAL_MEMORY
 
+        // If we have a beginning, set allocator as valid
+        if (begin != nullptr)
+        {
+            is_valid = true;
+        }
+
         // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
         allocation_begin = reinterpret_cast<uintptr_t>(begin);
         allocation_end = allocation_begin + max_size;
 
 #if USING_VIRTUAL_MEMORY
-        //setting page starts back one fictious page so first allocations immediately trigger a new commit
+        // setting page starts back one fictious page so first allocations immediately trigger a new commit
         page_start_front = allocation_begin - page_size;
         page_start_back = allocation_end;
 #endif // USING_VIRTUAL_MEMORY
-        // Initialize the current addresses to the edges of the allocated space
+       // Initialize the current addresses to the edges of the allocated space
         Reset();
     }
     ~DoubleEndedStackAllocator(void)
     {
 #if USING_VIRTUAL_MEMORY
-        VirtualFree(reinterpret_cast<void*>(allocation_begin), 0, MEM_RELEASE);
-#elif
+        VirtualFree(reinterpret_cast<void *>(allocation_begin), 0, MEM_RELEASE);
+#else
         free(reinterpret_cast<void *>(allocation_begin));
 #endif // USING_VIRTUAL_MEMORY
     }
@@ -200,7 +230,8 @@ class DoubleEndedStackAllocator
     {
         // Fun fact: casting nullptr to uintptr_t is controversial, so we do it the other way
         // https://stackoverflow.com/questions/60507186/can-nullptr-be-converted-to-uintptr-t-different-compilers-disagree
-        return reinterpret_cast<void *>(allocation_begin) != nullptr;
+        // return reinterpret_cast<void *>(allocation_begin) != nullptr;
+        return is_valid;
     }
 
     /**
@@ -274,7 +305,7 @@ class DoubleEndedStackAllocator
         }
 #endif // USING_VIRTUAL_MEMORY
 
-        // Allocate using correct offeset address (provide prev metadata address)
+        // Allocate using correct offeset address (provide prev address)
         uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_front);
 
         // Update internal address pointers
@@ -335,12 +366,13 @@ class DoubleEndedStackAllocator
         while (aligned_address - sizeof(Metadata) > page_start_back)
 #endif
         {
-            //commit another page
-            if (!VirtualAlloc(reinterpret_cast<void *>(page_start_back- page_size), page_size, MEM_COMMIT, PAGE_READWRITE))
+            // commit another page
+            if (!VirtualAlloc(reinterpret_cast<void *>(page_start_back - page_size), page_size, MEM_COMMIT,
+                              PAGE_READWRITE))
             {
-                // edgecase: there is enough space for the allocation from the current page on the other side but not enough space to commit
-                // another page from this side 
-                //if that is not the case something else went wrong
+                // edgecase: there is enough space for the allocation from the current page on the other side but not
+                // enough space to commit another page from this side
+                // if that is not the case something else went wrong
                 if (page_start_back - page_size > page_start_back + page_size)
                 {
                     assertm(false, "Back page commit failed!");
@@ -351,8 +383,7 @@ class DoubleEndedStackAllocator
         }
 #endif // USING_VIRTUAL_MEMORY
 
-
-        // Allocate with negative alignment and correct offset address (provide prev metadata address)
+        // Allocate with negative alignment and correct offset address (provide prev address)
         uintptr_t allocation_address = AllocateInternal(size, aligned_address, last_data_begin_address_back);
 
         // Update internal address pointers
@@ -390,10 +421,17 @@ class DoubleEndedStackAllocator
         // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
 #if WITH_DEBUG_CANARIES
         // Check canaries
-        assertm(IsCanaryValid(last_data_begin_address_front - sizeof(Metadata) - sizeof(CANARY)),
-                "First canary was overwritten - the memory is corrupted!");
-        assertm(IsCanaryValid(last_data_begin_address_front + metadata->content_size),
-                "Second canary was overwritten - the memory is corrupted!");
+        if (!IsCanaryValid(last_data_begin_address_front - sizeof(Metadata) - sizeof(CANARY)))
+        {
+            assertm(false, "First Canary was overwritten - the memory is corrupted!");
+            is_valid = false;
+        }
+
+        if (!IsCanaryValid(last_data_begin_address_front + metadata->content_size))
+        {
+            assertm(false, "Second Canary was overwritten - the memory is corrupted!");
+            is_valid = false;
+        }
 #endif
 
         // Set current to previous address
@@ -439,11 +477,18 @@ class DoubleEndedStackAllocator
 
         // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
 #if WITH_DEBUG_CANARIES
-        // Check canary
-        assertm(IsCanaryValid(last_data_begin_address_back - sizeof(Metadata) - sizeof(CANARY)),
-                "First Canary was overwritten - the memory is corrupted!");
-        assertm(IsCanaryValid(last_data_begin_address_back + metadata->content_size),
-                "Second Canary was overwritten - the memory is corrupted!");
+        // Check canaries
+        if (!IsCanaryValid(last_data_begin_address_back - sizeof(Metadata) - sizeof(CANARY)))
+        {
+            assertm(false, "First Canary was overwritten - the memory is corrupted!");
+            is_valid = false;
+        }
+
+        if (!IsCanaryValid(last_data_begin_address_back + metadata->content_size))
+        {
+            assertm(false, "Second Canary was overwritten - the memory is corrupted!");
+            is_valid = false;
+        }
 #endif
 
         // Set current to previous address
@@ -490,6 +535,8 @@ class DoubleEndedStackAllocator
 
     uintptr_t next_free_address_front;
     uintptr_t next_free_address_back;
+
+    bool is_valid = false;
 
     // Returns the the aligned address of the allocation
     uintptr_t AllocateInternal(size_t size, uintptr_t aligned_address, uintptr_t previous_address)
@@ -544,106 +591,23 @@ int main()
     {
         // You can remove this, just showcasing how the test functions can be used
         DoubleEndedStackAllocator allocator(1024u);
-        Tests::Test_Case_Failure("Allocate() does not return nullptr",
-                                 [&allocator]() { return allocator.Allocate(32, 5) != nullptr; }());
-
-        Tests::Test_Case_Failure("AllocateBack() does not return nullptr",
-                                 [&allocator]() { return allocator.AllocateBack(32, 5) != nullptr; }());
 
         Tests::Test_Case_Success("Allocate() successful", Tests::VerifyAllocationSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("AllocateBack() successful", Tests::VerifyAllocationBackSuccess(allocator, 32, 8));
         Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
-    }
-#endif // RUN_TEST
 
-    /*DoubleEndedStackAllocator allocator(1024u);
-    auto a = allocator.Allocate(32, 4);
-    auto a_uint8_t_pointer = reinterpret_cast<uint8_t *>(a);
-    for (int i = 0; i < 32; i++)
-    {
-        *a_uint8_t_pointer = 0xAA;
-        a_uint8_t_pointer++;
-    }
-    auto b = allocator.Allocate(63, 8);
-    auto b_uint8_t_pointer = reinterpret_cast<uint8_t *>(b);
-    for (int i = 0; i < 63; i++)
-    {
-        *b_uint8_t_pointer = 0xBB;
-        b_uint8_t_pointer++;
-    }
-    auto c = allocator.Allocate(121, 16);
-    auto c_uint8_t_pointer = reinterpret_cast<uint8_t *>(c);
-    for (int i = 0; i < 121; i++)
-    {
-        *c_uint8_t_pointer = 0xCC;
-        c_uint8_t_pointer++;
-    }
-    auto d = allocator.AllocateBack(32, 4);
-    auto d_uint8_t_pointer = reinterpret_cast<uint8_t *>(d);
-    for (int i = 0; i < 32; i++)
-    {
-        *d_uint8_t_pointer = 0xDD;
-        d_uint8_t_pointer++;
-    }
-    auto e = allocator.AllocateBack(63, 8);
-    auto e_uint8_t_pointer = reinterpret_cast<uint8_t *>(e);
-    for (int i = 0; i < 63; i++)
-    {
-        *e_uint8_t_pointer = 0xEE;
-        e_uint8_t_pointer++;
-    }
-    auto f = allocator.AllocateBack(121, 16);
-    auto f_uint8_t_pointer = reinterpret_cast<uint8_t *>(f);
-    for (int i = 0; i < 121; i++)
-    {
-        *f_uint8_t_pointer = 0xFF;
-        f_uint8_t_pointer++;
-    }
+        // FAILURE Tests
+        DoubleEndedStackAllocator allocatorForBreaking(1024u);
+        Tests::Test_Case_Success("Canary is overwritten", Tests::VerifyCanaryFailure(allocatorForBreaking, 32, 8));
 
-    allocator.Free(c);
-
-    auto g = allocator.Allocate(121, 16);
-    auto g_uint8_t_pointer = reinterpret_cast<uint8_t *>(g);
-    for (int i = 0; i < 121; i++)
-    {
-        *g_uint8_t_pointer = 0x99;
-        g_uint8_t_pointer++;
+        Tests::Test_Case_Failure("Allocate() does not return nullptr",
+                                 [&allocator]() { return allocator.Allocate(32, 5) != nullptr; }());
+        Tests::Test_Case_Failure("AllocateBack() does not return nullptr",
+                                 [&allocator]() { return allocator.AllocateBack(32, 5) != nullptr; }());
     }
+#endif
 
-    allocator.FreeBack(f);
-
-    auto h = allocator.AllocateBack(121, 16);
-    auto h_uint8_t_pointer = reinterpret_cast<uint8_t *>(h);
-    for (int i = 0; i < 121; i++)
-    {
-        *h_uint8_t_pointer = 0x88;
-        h_uint8_t_pointer++;
-    }
-
-    allocator.Free(g);
-    allocator.Free(b);
-    allocator.Free(a);
-
-    auto ii = allocator.Allocate(121, 4);
-    auto ii_uint8_t_pointer = reinterpret_cast<uint8_t *>(ii);
-    for (int i = 0; i < 121; i++)
-    {
-        *ii_uint8_t_pointer = 0x77;
-        ii_uint8_t_pointer++;
-    }
-
-    allocator.FreeBack(h);
-    allocator.FreeBack(e);
-    allocator.FreeBack(d);
-
-    auto j = allocator.AllocateBack(32, 4);
-    auto j_uint8_t_pointer = reinterpret_cast<uint8_t *>(j);
-    for (int i = 0; i < 32; i++)
-    {
-        *j_uint8_t_pointer = 0x66;
-        j_uint8_t_pointer++;
-    }*/
     // Here the assignment tests will happen - it will test basic allocator functionality.
     {
     }
