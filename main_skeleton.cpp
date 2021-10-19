@@ -492,7 +492,7 @@ class DoubleEndedStackAllocator
         uintptr_t aligned_address = Align(offset_address, -int64_t(alignment));
 #if WITH_DEBUG_CANARIES
         if (aligned_address - sizeof(Metadata) - sizeof(CANARY) < next_free_address_front)
-#elif
+#else
         if (aligned_address - sizeof(Metadata) < next_free_address_front)
 #endif
         {
@@ -819,6 +819,7 @@ int main()
         Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
 
+#if WITH_DEBUG_CANARIES
         // FAILURE Tests
         DoubleEndedStackAllocator a(1024u);
         Tests::Test_Case_Success("Canary before overwritten", Tests::VerifyCanaryBeforeFailure(a, 32, 8));
@@ -837,6 +838,7 @@ int main()
         DoubleEndedStackAllocator h(1024u);
         Tests::Test_Case_Success("Metadata back address overwritten",
                                  Tests::VerifyBackMetadataPrevAddressOverwritten(f, 32, 8));
+#endif
 
         Tests::Test_Case_Failure("Allocate() does not return nullptr",
                                  [&allocator]() { return allocator.Allocate(32, 5) != nullptr; }());
