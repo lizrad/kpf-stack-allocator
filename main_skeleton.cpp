@@ -59,7 +59,51 @@ namespace Tests
 
         return true;
     }
-} // namespace Tests
+
+    template <class A> bool VerifyAllocationBackSuccess(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+
+        if (mem == nullptr)
+        {
+            printf("[Error]: Allocator returned nullptr!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyFreeSuccess(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size, alignment);
+        allocator.Free(mem);
+
+        void *mem2 = allocator.Allocate(size, alignment);
+
+        if (mem != mem2)
+        {
+            printf("[Error]: Addresses are different!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyFreeBackSuccess(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+        allocator.FreeBack(mem);
+        void *mem2 = allocator.AllocateBack(size, alignment);
+
+        if (mem != mem2)
+        {
+            printf("[Error]: Addresses are different!\n");
+            return false;
+        }
+
+        return true;
+    }
+}
 
 // Assignment functionality tests are going to be included here
 
@@ -168,14 +212,15 @@ class DoubleEndedStackAllocator
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
-    void *Allocate(size_t size, int64_t alignment)
+    void *Allocate(size_t size, size_t alignment)
     {
         if (reinterpret_cast<void *>(next_free_address_front) == nullptr)
         {
             assertm(false, "Allocator did not allocate any memory");
             return nullptr;
         }
-        if (alignment % 2 != 0)
+        // Check for power of two
+        if (!alignment || (alignment & (alignment - 1)))
         {
             assertm(false, "Allocation only works with an alignement of the power of two");
             return nullptr;
@@ -245,14 +290,16 @@ class DoubleEndedStackAllocator
 
     // Alignment must be a power of two.
     // Returns a nullptr if there is not enough memory left.
-    void *AllocateBack(size_t size, int64_t alignment)
+    void *AllocateBack(size_t size, size_t alignment)
     {
         if (reinterpret_cast<void *>(next_free_address_back) == nullptr)
         {
             assertm(false, "Allocator did not allocate any memory");
             return nullptr;
         }
-        if (alignment % 2 != 0)
+        // Check for power of two
+
+        if (!alignment || (alignment & (alignment - 1)))
         {
             assertm(false, "Allocation only works with an alignement of the power of two");
             return nullptr;
@@ -268,7 +315,7 @@ class DoubleEndedStackAllocator
         // Making sure there is enough space for the content
         offset_address -= size;
 
-        uintptr_t aligned_address = Align(offset_address, -alignment);
+        uintptr_t aligned_address = Align(offset_address, -int64_t(alignment));
 #if WITH_DEBUG_CANARIES
         if (aligned_address - sizeof(Metadata) - sizeof(CANARY) < next_free_address_front)
 #elif
@@ -488,7 +535,7 @@ class DoubleEndedStackAllocator
     }
 };
 
-#define RUN_TESTS 0
+#define RUN_TESTS 1
 int main()
 {
 // You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a
@@ -497,12 +544,20 @@ int main()
     {
         // You can remove this, just showcasing how the test functions can be used
         DoubleEndedStackAllocator allocator(1024u);
-        Tests::Test_Case_Success("Allocate() does not return nullptr",
-                                 [&allocator]() { return allocator.Allocate(32, 1) != nullptr; }());
+        Tests::Test_Case_Failure("Allocate() does not return nullptr",
+                                 [&allocator]() { return allocator.Allocate(32, 5) != nullptr; }());
+
+        Tests::Test_Case_Failure("AllocateBack() does not return nullptr",
+                                 [&allocator]() { return allocator.AllocateBack(32, 5) != nullptr; }());
+
+        Tests::Test_Case_Success("Allocate() successful", Tests::VerifyAllocationSuccess(allocator, 32, 4));
+        Tests::Test_Case_Success("AllocateBack() successful", Tests::VerifyAllocationBackSuccess(allocator, 32, 8));
+        Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
+        Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
     }
 #endif // RUN_TEST
 
-    DoubleEndedStackAllocator allocator(1024u);
+    /*DoubleEndedStackAllocator allocator(1024u);
     auto a = allocator.Allocate(32, 4);
     auto a_uint8_t_pointer = reinterpret_cast<uint8_t *>(a);
     for (int i = 0; i < 32; i++)
@@ -588,7 +643,7 @@ int main()
     {
         *j_uint8_t_pointer = 0x66;
         j_uint8_t_pointer++;
-    }
+    }*/
     // Here the assignment tests will happen - it will test basic allocator functionality.
     {
     }
