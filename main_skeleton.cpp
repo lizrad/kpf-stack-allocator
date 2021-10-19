@@ -15,6 +15,8 @@
 // Use (void) to silent unused warnings.
 #define assertm(exp, msg) assert(((void)msg, exp))
 
+struct Metadata;
+
 namespace Tests
 {
     void Test_Case_Success(const char *name, bool passed)
@@ -104,11 +106,11 @@ namespace Tests
         return true;
     }
 
-    template <class A> bool VerifyCanaryFailure(A &allocator, size_t size, size_t alignment)
+    template <class A> bool VerifyCanaryAfterFailure(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
         uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
-        for (int i = 0; i < size + alignment; i++)
+        for (int i = 0; i < size + 2; i++)
         {
             *mem_pointer = 0xAA;
             mem_pointer++;
@@ -124,6 +126,147 @@ namespace Tests
 
         return true;
     }
+
+    template <class A> bool VerifyCanaryBeforeFailure(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        for (int i = 0; i < sizeof(Metadata) + 2; i++)
+        {
+            *mem_pointer = 0xAA;
+            mem_pointer--;
+        }
+
+        allocator.Free(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyBackCanaryAfterFailure(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        for (int i = 0; i < size + 4; i++)
+        {
+            *mem_pointer = 0xAA;
+            mem_pointer++;
+        }
+
+        allocator.FreeBack(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyBackCanaryBeforeFailure(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        for (int i = 0; i < sizeof(Metadata) + 2; i++)
+        {
+            *mem_pointer = 0xAA;
+            mem_pointer--;
+        }
+
+        allocator.FreeBack(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyMetadataSizeOverwritten(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        mem_pointer += sizeof(uintptr_t);
+        for (int i = 0; i < 1; i++)
+        {
+            *mem_pointer = 0xAA;
+            mem_pointer--;
+        }
+
+        allocator.Free(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyBackMetadataSizeOverwritten(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        mem_pointer -= sizeof(uintptr_t);
+        mem_pointer--;
+        *mem_pointer = 0xAA;
+
+        allocator.FreeBack(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyMetadataPrevAddressOverwritten(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        mem_pointer -= sizeof(uintptr_t);
+        *mem_pointer = *(mem_pointer + alignment);
+
+        allocator.Free(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyBackMetadataPrevAddressOverwritten(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size, alignment);
+        uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
+        mem_pointer -= sizeof(uintptr_t);
+        *mem_pointer = *(mem_pointer + alignment);
+
+        allocator.FreeBack(mem);
+
+        if (allocator.IsValid())
+        {
+            printf("[Error]: Allocator still valid!\n");
+            return false;
+        }
+
+        return true;
+    }
+
 } // namespace Tests
 
 // Assignment functionality tests are going to be included here
@@ -411,43 +554,81 @@ class DoubleEndedStackAllocator
         uintptr_t address = reinterpret_cast<uintptr_t>(memory);
         if (address != last_data_begin_address_front)
         {
-
             assertm(false, "Free must be called LIFO!");
             return;
         }
 
         Metadata *metadata = ReadMetadata(last_data_begin_address_front);
+        uintptr_t previous_address = metadata->previous_address;
+        // Read data from new front
+        Metadata *previous_metadata = ReadMetadata(previous_address);
 
-        // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
 #if WITH_DEBUG_CANARIES
-        // Check canaries
+        // Check canary before
         if (!IsCanaryValid(last_data_begin_address_front - sizeof(Metadata) - sizeof(CANARY)))
         {
             assertm(false, "First Canary was overwritten - the memory is corrupted!");
             is_valid = false;
+            return;
         }
 
+        // Check if content size was overwritten
+        if (last_data_begin_address_front + metadata->content_size > allocation_end)
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Check canary after
         if (!IsCanaryValid(last_data_begin_address_front + metadata->content_size))
         {
             assertm(false, "Second Canary was overwritten - the memory is corrupted!");
             is_valid = false;
+            return;
+        }
+
+        // Check validity of previous address with canaries
+        // Check if address is outside allocator range
+        if (previous_address > allocation_end || previous_address < allocation_begin)
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Canary before prev address
+        if (previous_address - sizeof(Metadata) - sizeof(CANARY) < allocation_begin ||
+            !IsCanaryValid(previous_address - sizeof(Metadata) - sizeof(CANARY)))
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Canary after prev address
+        if (previous_address + previous_metadata->content_size > allocation_end ||
+            !IsCanaryValid(previous_address + previous_metadata->content_size))
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
         }
 #endif
 
-        // Set current to previous address
-        last_data_begin_address_front = metadata->previous_address;
-
         // If beginning reached, set free address to beginning
-        if (last_data_begin_address_front == allocation_begin)
+        if (previous_address == allocation_begin)
         {
+            last_data_begin_address_front = allocation_begin;
             next_free_address_front = allocation_begin;
             return;
         }
 
-        // Read data from new front
-        metadata = ReadMetadata(last_data_begin_address_front);
+        // Set current to previous address
+        last_data_begin_address_front = metadata->previous_address;
+
         // Add data size from new front
-        next_free_address_front = last_data_begin_address_front + metadata->content_size;
+        next_free_address_front = last_data_begin_address_front + previous_metadata->content_size;
 
 #if WITH_DEBUG_CANARIES
         // Add Canary
@@ -473,33 +654,75 @@ class DoubleEndedStackAllocator
             assertm(false, "FreeBack must be called LIFO!");
             return;
         }
-        Metadata *metadata = ReadMetadata(last_data_begin_address_back);
 
-        // Not returning if the asserts fail as canaries shouldnt be enabled in release build anyway
+        Metadata *metadata = ReadMetadata(last_data_begin_address_back);
+        uintptr_t previous_address = metadata->previous_address;
+        Metadata *previous_metadata = ReadMetadata(previous_address);
+
 #if WITH_DEBUG_CANARIES
-        // Check canaries
+        // Check canary before
         if (!IsCanaryValid(last_data_begin_address_back - sizeof(Metadata) - sizeof(CANARY)))
         {
             assertm(false, "First Canary was overwritten - the memory is corrupted!");
             is_valid = false;
+            return;
         }
 
+        // Check if content size was overwritten
+        if (last_data_begin_address_back + metadata->content_size > allocation_end)
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Check canary after
         if (!IsCanaryValid(last_data_begin_address_back + metadata->content_size))
         {
             assertm(false, "Second Canary was overwritten - the memory is corrupted!");
             is_valid = false;
+            return;
         }
+
+        // Check validity of previous address with canaries
+        // Check if address is outside allocator range
+        if (previous_address > allocation_end || previous_address < allocation_begin)
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Canary before prev address
+        if (previous_address - sizeof(Metadata) - sizeof(CANARY) < allocation_begin ||
+            !IsCanaryValid(previous_address - sizeof(Metadata) - sizeof(CANARY)))
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
+        // Canary after prev address
+        if (previous_address + previous_metadata->content_size > allocation_end ||
+            !IsCanaryValid(previous_address + previous_metadata->content_size))
+        {
+            assertm(false, "Metadata was overwritten - the memory is corrupted!");
+            is_valid = false;
+            return;
+        }
+
 #endif
 
-        // Set current to previous address
-        last_data_begin_address_back = metadata->previous_address;
-
         // If end reached, set free address to end
-        if (last_data_begin_address_back == allocation_end)
+        if (previous_address == allocation_end)
         {
+            last_data_begin_address_back = allocation_end;
             next_free_address_back = allocation_end;
             return;
         }
+
+        // Set current to previous address
+        last_data_begin_address_back = previous_address;
 
         // Add data size from new back
         next_free_address_back = last_data_begin_address_back - sizeof(Metadata);
@@ -559,7 +782,6 @@ class DoubleEndedStackAllocator
 
     Metadata *ReadMetadata(uintptr_t address) const
     {
-        // TODO: Handle Metadata not found
         return reinterpret_cast<Metadata *>(address - sizeof(Metadata));
     }
 
@@ -598,8 +820,23 @@ int main()
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
 
         // FAILURE Tests
-        DoubleEndedStackAllocator allocatorForBreaking(1024u);
-        Tests::Test_Case_Success("Canary is overwritten", Tests::VerifyCanaryFailure(allocatorForBreaking, 32, 8));
+        DoubleEndedStackAllocator a(1024u);
+        Tests::Test_Case_Success("Canary before overwritten", Tests::VerifyCanaryBeforeFailure(a, 32, 8));
+        DoubleEndedStackAllocator b(1024u);
+        Tests::Test_Case_Success("Canary after overwritten", Tests::VerifyCanaryAfterFailure(b, 32, 8));
+        DoubleEndedStackAllocator c(1024u);
+        Tests::Test_Case_Success("Canary back before overwritten", Tests::VerifyBackCanaryBeforeFailure(c, 32, 8));
+        DoubleEndedStackAllocator d(1024u);
+        Tests::Test_Case_Success("Canary back after overwritten", Tests::VerifyBackCanaryAfterFailure(d, 32, 8));
+        DoubleEndedStackAllocator e(1024u);
+        Tests::Test_Case_Success("Metadata size overwritten", Tests::VerifyMetadataSizeOverwritten(e, 32, 8));
+        DoubleEndedStackAllocator f(1024u);
+        Tests::Test_Case_Success("Metadata address overwritten", Tests::VerifyMetadataPrevAddressOverwritten(f, 32, 8));
+        DoubleEndedStackAllocator g(1024u);
+        Tests::Test_Case_Success("Metadata back size overwritten", Tests::VerifyBackMetadataSizeOverwritten(f, 32, 8));
+        DoubleEndedStackAllocator h(1024u);
+        Tests::Test_Case_Success("Metadata back address overwritten",
+                                 Tests::VerifyBackMetadataPrevAddressOverwritten(f, 32, 8));
 
         Tests::Test_Case_Failure("Allocate() does not return nullptr",
                                  [&allocator]() { return allocator.Allocate(32, 5) != nullptr; }());
