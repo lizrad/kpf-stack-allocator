@@ -49,6 +49,8 @@ namespace Tests
      * example so you can already try to cover all cases you judge as being important by
      * yourselves.
      **/
+
+    // Checks if the allocation works
     template <class A> bool VerifyAllocationSuccess(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -62,6 +64,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the allocation on the back works
     template <class A> bool VerifyAllocationBackSuccess(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -75,6 +78,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the free works
     template <class A> bool VerifyFreeSuccess(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -91,6 +95,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the free on the back works
     template <class A> bool VerifyFreeBackSuccess(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -106,6 +111,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the broken Canary after the data is noticed
     template <class A> bool VerifyCanaryAfterFailure(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -127,6 +133,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the broken Canary before the data is noticed
     template <class A> bool VerifyCanaryBeforeFailure(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -148,6 +155,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the broken Canary after the data is noticed (on the back side)
     template <class A> bool VerifyBackCanaryAfterFailure(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -169,6 +177,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the broken Canary before the data is noticed (on the back side)
     template <class A> bool VerifyBackCanaryBeforeFailure(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -190,6 +199,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the size inside the metadata being overwritten is noticed
     template <class A> bool VerifyMetadataSizeOverwritten(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -211,7 +221,8 @@ namespace Tests
 
         return true;
     }
-
+    
+    // Checks if the size inside the metadata being overwritten is noticed (on the back side)
     template <class A> bool VerifyBackMetadataSizeOverwritten(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -231,6 +242,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the previous address inside the metadata being overwritten is noticed
     template <class A> bool VerifyMetadataPrevAddressOverwritten(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size, alignment);
@@ -249,6 +261,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the previous address inside the metadata being overwritten is noticed (on the back side)
     template <class A> bool VerifyBackMetadataPrevAddressOverwritten(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size, alignment);
@@ -267,6 +280,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the allocation fails when the allocator is full (from the back side)
     template <class A> bool VerifyNullptrIfFullBack(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.AllocateBack(size / 3 + 1, alignment);
@@ -288,6 +302,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the allocation fails when the allocator is full (from the front side)
     template <class A> bool VerifyNullptrIfFullFront(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size / 3 + 1, alignment);
@@ -309,6 +324,7 @@ namespace Tests
         return true;
     }
 
+    // Checks if the allocation fails when the allocator is full (from the both sides)
     template <class A> bool VerifyNullptrIfFullMixed(A &allocator, size_t size, size_t alignment)
     {
         void *mem = allocator.Allocate(size / 3 + 1, alignment);
@@ -333,7 +349,6 @@ namespace Tests
 
 } // namespace Tests
 
-// Assignment functionality tests are going to be included here
 
 // If set to 1, Free() and FreeBack() should assert if the memory canaries are corrupted
 #define WITH_DEBUG_CANARIES 1
@@ -350,13 +365,16 @@ namespace Tests
 static const uint16_t CANARY = 0x0DD0;
 #endif
 
+// Placed in front of the data
 struct Metadata
 {
     Metadata(size_t content_size, uintptr_t previous_address)
         : content_size(content_size), previous_address(previous_address)
     {
     }
+    // Size of the content
     size_t content_size;
+    // Address of the previous data (allocated before this data)
     uintptr_t previous_address;
 };
 
