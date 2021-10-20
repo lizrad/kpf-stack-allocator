@@ -110,7 +110,7 @@ namespace Tests
     {
         void *mem = allocator.Allocate(size, alignment);
         uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
-        for (int i = 0; i < size + 2; i++)
+        for (size_t i = 0; i < size + 2; i++)
         {
             *mem_pointer = 0xAA;
             mem_pointer++;
@@ -131,7 +131,7 @@ namespace Tests
     {
         void *mem = allocator.Allocate(size, alignment);
         uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
-        for (int i = 0; i < sizeof(Metadata) + 2; i++)
+        for (long unsigned int i = 0; i < sizeof(Metadata) + 2; i++)
         {
             *mem_pointer = 0xAA;
             mem_pointer--;
@@ -152,7 +152,7 @@ namespace Tests
     {
         void *mem = allocator.AllocateBack(size, alignment);
         uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
-        for (int i = 0; i < size + 2; i++)
+        for (size_t i = 0; i < size + 2; i++)
         {
             *mem_pointer = 0xAA;
             mem_pointer++;
@@ -173,7 +173,7 @@ namespace Tests
     {
         void *mem = allocator.AllocateBack(size, alignment);
         uint8_t *mem_pointer = reinterpret_cast<uint8_t *>(mem);
-        for (int i = 0; i < sizeof(Metadata) + 2; i++)
+        for (long unsigned int i = 0; i < sizeof(Metadata) + 2; i++)
         {
             *mem_pointer = 0xAA;
             mem_pointer--;
