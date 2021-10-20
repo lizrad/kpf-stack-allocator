@@ -281,8 +281,9 @@ namespace Tests
     }
 
     // Checks if the allocation fails when the allocator is full (from the back side)
-    template <class A> bool VerifyNullptrIfFullBack(A &allocator, size_t size, size_t alignment)
+    template <class A> bool VerifyNullptrIfFullBack(A &allocator , size_t alignment)
     {
+        size_t size = allocator.GetReservedSize();
         void *mem = allocator.AllocateBack(size / 3 + 1, alignment);
         void *mem2 = allocator.AllocateBack(size / 3 + 1, alignment);
         void *mem3 = allocator.AllocateBack(size / 3 + 1, alignment);
@@ -303,8 +304,9 @@ namespace Tests
     }
 
     // Checks if the allocation fails when the allocator is full (from the front side)
-    template <class A> bool VerifyNullptrIfFullFront(A &allocator, size_t size, size_t alignment)
+    template <class A> bool VerifyNullptrIfFullFront(A &allocator, size_t alignment)
     {
+        size_t size = allocator.GetReservedSize();
         void *mem = allocator.Allocate(size / 3 + 1, alignment);
         void *mem2 = allocator.Allocate(size / 3 + 1, alignment);
         void *mem3 = allocator.Allocate(size / 3 + 1, alignment);
@@ -325,8 +327,9 @@ namespace Tests
     }
 
     // Checks if the allocation fails when the allocator is full (from the both sides)
-    template <class A> bool VerifyNullptrIfFullMixed(A &allocator, size_t size, size_t alignment)
+    template <class A> bool VerifyNullptrIfFullMixed(A &allocator, size_t alignment)
     {
+        size_t size = allocator.GetReservedSize();
         void *mem = allocator.Allocate(size / 3 + 1, alignment);
         void *mem2 = allocator.AllocateBack(size / 3 + 1, alignment);
         void *mem3 = allocator.Allocate(size / 3 + 1, alignment);
@@ -398,7 +401,6 @@ class DoubleEndedStackAllocator
 
         // If given size is smaller than a page, use page size instead
         max_size = max(max_size, page_size);
-
         // Reserve the max size and set its memory protection constants to no access so errors are noticable
         void *begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
         assertm(begin != nullptr, "Memory reservation failed!");
@@ -406,6 +408,7 @@ class DoubleEndedStackAllocator
         void *begin = malloc(max_size);
         assertm(begin != nullptr, "Malloc failed!");
 #endif
+        reserved_size = max_size;
         // If we have a beginning, set allocator as valid
         if (begin != nullptr)
         {
@@ -814,7 +817,15 @@ class DoubleEndedStackAllocator
 #endif
     }
 
+    size_t GetReservedSize()
+    {
+        return reserved_size;
+    }
   private:
+    // The size of the reserved memory
+    // necessary because if user passes less than page size and the allocator is using virtual memory
+    // this size might not be exactly what was passed, as it has to be at least the size of a page
+    size_t reserved_size;
 #if USING_VIRTUAL_MEMORY
     DWORD page_size;
     uintptr_t page_start_front;
@@ -879,11 +890,8 @@ class DoubleEndedStackAllocator
 #define RUN_TESTS 1
 int main()
 {
-// You can add your own tests here, I will call my tests at then end with a fresh instance of your allocator and a
-// specific max_size
 #if RUN_TESTS
     {
-        // You can remove this, just showcasing how the test functions can be used
         DoubleEndedStackAllocator allocator(1024u);
 
         Tests::Test_Case_Success("Allocate() successful", Tests::VerifyAllocationSuccess(allocator, 32, 4));
@@ -891,17 +899,17 @@ int main()
         Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
 
-        DoubleEndedStackAllocator fullback(1024u * 4);
+        DoubleEndedStackAllocator fullback(1024u);
         Tests::Test_Case_Success("nullptr is returned as soon as the back is too full",
-                                 Tests::VerifyNullptrIfFullBack(fullback, 1024 * 4, 8));
+                                 Tests::VerifyNullptrIfFullBack(fullback, 8));
 
-        DoubleEndedStackAllocator fullfront(1024u * 4);
+        DoubleEndedStackAllocator fullfront(1024u);
         Tests::Test_Case_Success("nullptr is returned as soon as the front is too full",
-                                 Tests::VerifyNullptrIfFullFront(fullfront, 1024 * 4, 8));
+                                 Tests::VerifyNullptrIfFullFront(fullfront, 8));
 
-        DoubleEndedStackAllocator fullmixed(1024u * 4);
+        DoubleEndedStackAllocator fullmixed(1024u);
         Tests::Test_Case_Success("nullptr is returned as soon as the middle is too full",
-                                 Tests::VerifyNullptrIfFullFront(fullmixed, 1024 * 4, 8));
+                                 Tests::VerifyNullptrIfFullMixed(fullmixed, 8));
 
 #if WITH_DEBUG_CANARIES
         // FAILURE Tests
