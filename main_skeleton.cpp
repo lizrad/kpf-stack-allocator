@@ -267,6 +267,70 @@ namespace Tests
         return true;
     }
 
+    template <class A> bool VerifyNullptrIfFullBack(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.AllocateBack(size / 3 + 1, alignment);
+        void *mem2 = allocator.AllocateBack(size / 3 + 1, alignment);
+        void *mem3 = allocator.AllocateBack(size / 3 + 1, alignment);
+
+        if (mem == nullptr || mem2 == nullptr)
+        {
+            printf("[Error]: Allocator was full too early!\n");
+            return false;
+        }
+
+        if (mem3 != nullptr)
+        {
+            printf("[Error]: Allocator didn't return nullptr when it should be full!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyNullptrIfFullFront(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size / 3 + 1, alignment);
+        void *mem2 = allocator.Allocate(size / 3 + 1, alignment);
+        void *mem3 = allocator.Allocate(size / 3 + 1, alignment);
+
+        if (mem == nullptr || mem2 == nullptr)
+        {
+            printf("[Error]: Allocator was full too early!\n");
+            return false;
+        }
+
+        if (mem3 != nullptr)
+        {
+            printf("[Error]: Allocator didn't return nullptr when it should be full!\n");
+            return false;
+        }
+
+        return true;
+    }
+
+    template <class A> bool VerifyNullptrIfFullMixed(A &allocator, size_t size, size_t alignment)
+    {
+        void *mem = allocator.Allocate(size / 3 + 1, alignment);
+        void *mem2 = allocator.AllocateBack(size / 3 + 1, alignment);
+        void *mem3 = allocator.Allocate(size / 3 + 1, alignment);
+        void *mem4 = allocator.AllocateBack(size / 3 + 1, alignment);
+
+        if (mem == nullptr || mem2 == nullptr)
+        {
+            printf("[Error]: Allocator was full too early!\n");
+            return false;
+        }
+
+        if (mem3 != nullptr || mem4 != nullptr)
+        {
+            printf("[Error]: Allocator didn't return nullptr when it should be full!\n");
+            return false;
+        }
+
+        return true;
+    }
+
 } // namespace Tests
 
 // Assignment functionality tests are going to be included here
@@ -818,6 +882,18 @@ int main()
         Tests::Test_Case_Success("AllocateBack() successful", Tests::VerifyAllocationBackSuccess(allocator, 32, 8));
         Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
+
+        DoubleEndedStackAllocator fullback(1024u);
+        Tests::Test_Case_Success("nullptr is returned as soon as the back is too full",
+                                 Tests::VerifyNullptrIfFullBack(fullback, 1024, 8));
+
+        DoubleEndedStackAllocator fullfront(1024u);
+        Tests::Test_Case_Success("nullptr is returned as soon as the front is too full",
+                                 Tests::VerifyNullptrIfFullFront(fullfront, 1024, 8));
+
+        DoubleEndedStackAllocator fullmixed(1024u);
+        Tests::Test_Case_Success("nullptr is returned as soon as the middle is too full",
+                                 Tests::VerifyNullptrIfFullFront(fullmixed, 1024, 8));
 
 #if WITH_DEBUG_CANARIES
         // FAILURE Tests
