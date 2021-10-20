@@ -221,7 +221,7 @@ namespace Tests
 
         return true;
     }
-    
+
     // Checks if the size inside the metadata being overwritten is noticed (on the back side)
     template <class A> bool VerifyBackMetadataSizeOverwritten(A &allocator, size_t size, size_t alignment)
     {
@@ -349,7 +349,6 @@ namespace Tests
 
 } // namespace Tests
 
-
 // If set to 1, Free() and FreeBack() should assert if the memory canaries are corrupted
 #define WITH_DEBUG_CANARIES 1
 
@@ -402,34 +401,22 @@ class DoubleEndedStackAllocator
 
         // Reserve the max size and set its memory protection constants to no access so errors are noticable
         void *begin = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
-
-        // Not handling this here in release, because undefined behaviour would only appear in allocate functions where
-        // we catch it by returning a nullptr
         assertm(begin != nullptr, "Memory reservation failed!");
-
 #else
         void *begin = malloc(max_size);
-        // not handling this here in release, because undefined behaviour would only appear in allocate functions where
-        // we catch it by returning a nullptr
         assertm(begin != nullptr, "Malloc failed!");
-#endif // USING_VIRTUAL_MEMORY
-
+#endif
         // If we have a beginning, set allocator as valid
         if (begin != nullptr)
         {
             is_valid = true;
         }
 
-        // These values will stay constant throughout the object's lifetime (unless grow functionality is added)
+        // These values will stay constant throughout the object's lifetime
         allocation_begin = reinterpret_cast<uintptr_t>(begin);
         allocation_end = allocation_begin + max_size;
 
-#if USING_VIRTUAL_MEMORY
-        // setting page starts back one fictious page so first allocations immediately trigger a new commit
-        page_start_front = allocation_begin - page_size;
-        page_start_back = allocation_end;
-#endif // USING_VIRTUAL_MEMORY
-       // Initialize the current addresses to the edges of the allocated space
+        // Initialize the current addresses to the edges of the allocated space
         Reset();
     }
     ~DoubleEndedStackAllocator(void)
@@ -438,7 +425,7 @@ class DoubleEndedStackAllocator
         VirtualFree(reinterpret_cast<void *>(allocation_begin), 0, MEM_RELEASE);
 #else
         free(reinterpret_cast<void *>(allocation_begin));
-#endif // USING_VIRTUAL_MEMORY
+#endif
     }
 
     // Copy and Move Constructors / Assignment Operators are explicitly deleted.
@@ -453,9 +440,6 @@ class DoubleEndedStackAllocator
     // Returns `false` if the Allocator is in an unusable state, e.g. because the initial memory allocation failed.
     bool IsValid()
     {
-        // Fun fact: casting nullptr to uintptr_t is controversial, so we do it the other way
-        // https://stackoverflow.com/questions/60507186/can-nullptr-be-converted-to-uintptr-t-different-compilers-disagree
-        // return reinterpret_cast<void *>(allocation_begin) != nullptr;
         return is_valid;
     }
 
@@ -506,13 +490,13 @@ class DoubleEndedStackAllocator
 #if USING_VIRTUAL_MEMORY
 #if WITH_DEBUG_CANARIES
 
-        // while there is not enough space left on the current page
+        // While there is not enough space left on the current page
         while (aligned_address + size + sizeof(CANARY) > page_start_front + page_size)
 #else
         while (aligned_address + size > page_start_front + page_size)
 #endif
         {
-            // try to commit another page
+            // Try to commit another page
             if (!VirtualAlloc(reinterpret_cast<void *>(page_start_front + page_size), page_size, MEM_COMMIT,
                               PAGE_READWRITE))
             {
@@ -822,6 +806,12 @@ class DoubleEndedStackAllocator
 
         next_free_address_front = allocation_begin;
         next_free_address_back = allocation_end;
+
+#if USING_VIRTUAL_MEMORY
+        // Setting page starts back one fictious page so first allocations immediately trigger a new commit
+        page_start_front = allocation_begin - page_size;
+        page_start_back = allocation_end;
+#endif
     }
 
   private:
@@ -901,17 +891,17 @@ int main()
         Tests::Test_Case_Success("Free() successful", Tests::VerifyFreeSuccess(allocator, 32, 4));
         Tests::Test_Case_Success("FreeBack() successful", Tests::VerifyFreeBackSuccess(allocator, 32, 8));
 
-        DoubleEndedStackAllocator fullback(1024u);
+        DoubleEndedStackAllocator fullback(1024u * 4);
         Tests::Test_Case_Success("nullptr is returned as soon as the back is too full",
-                                 Tests::VerifyNullptrIfFullBack(fullback, 1024, 8));
+                                 Tests::VerifyNullptrIfFullBack(fullback, 1024 * 4, 8));
 
-        DoubleEndedStackAllocator fullfront(1024u);
+        DoubleEndedStackAllocator fullfront(1024u * 4);
         Tests::Test_Case_Success("nullptr is returned as soon as the front is too full",
-                                 Tests::VerifyNullptrIfFullFront(fullfront, 1024, 8));
+                                 Tests::VerifyNullptrIfFullFront(fullfront, 1024 * 4, 8));
 
-        DoubleEndedStackAllocator fullmixed(1024u);
+        DoubleEndedStackAllocator fullmixed(1024u * 4);
         Tests::Test_Case_Success("nullptr is returned as soon as the middle is too full",
-                                 Tests::VerifyNullptrIfFullFront(fullmixed, 1024, 8));
+                                 Tests::VerifyNullptrIfFullFront(fullmixed, 1024 * 4, 8));
 
 #if WITH_DEBUG_CANARIES
         // FAILURE Tests
