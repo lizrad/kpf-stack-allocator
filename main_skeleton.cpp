@@ -887,7 +887,9 @@ class DoubleEndedStackAllocator
     }
 };
 
-#define RUN_TESTS 1
+
+//Deactivating own tests, as they would trigger asserts when using debug build (as they should) which might interfere with your tests
+#define RUN_TESTS 0
 int main()
 {
 #if RUN_TESTS
